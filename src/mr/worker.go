@@ -63,10 +63,10 @@ func (manager *WorkerManager)scheduler() {
 			keyCollections = append(keyCollections, each.Key)
 		}
 	}
-	for index := 0; i < manager.ReduceNums; i++ {
+	for index := 0; index < manager.ReduceNums; index++ {
 		for _, key := range keyCollections {
 			if ihash(key) == index {
-				// Expect to use channel to send key to special ReduceHandle
+				// Expect to use channel to send key to special ReduceHndle
 			}
 		}
 	}
