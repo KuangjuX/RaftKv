@@ -17,6 +17,7 @@ type KeyValue struct {
 	Value string
 }
 
+
 type  WorkerManager struct {
 	MapChan []chan int
 	ReduceChan []chan int
@@ -36,17 +37,17 @@ func ihash(key string) int {
 }
 
 // Map handler
-func HandleMap(filename string, kv *KeyValue, wg *sync.WaitGroup){
+func HandleMap(filename string, KvMap *[]KeyValue, wg *sync.WaitGroup){
 	wg.Done()
 }
 
-func HandleReduce(filename []string, wg *sync.WaitGroup) {
-
+func HandleReduce(MapList []KeyValue, KvReduce *[]KeyValue, wg *sync.WaitGroup) {
+	wg.Done()
 }
 
 // WorkerManager schedule how to execute map and reduce functions
 func (manager *WorkerManager)scheduler() {
-	mapList := make([]KeyValue, manager.MapNums)
+	mapList := make([][]KeyValue, manager.MapNums)
 	wg := sync.WaitGroup{}
 	for index, filename := range manager.InputFiles {
 		go HandleMap(filename, &mapList[index], &wg)
@@ -55,7 +56,21 @@ func (manager *WorkerManager)scheduler() {
 	// Wait for all map goroutine to execute.
 	wg.Wait()
 	// Write files by key-value list
-	//reduceList := make([]KeyValue, manager.ReduceNums)
+	// Collection all the key of mapList
+	keyCollections := make([]string, 0)
+	for _, list := range mapList {
+		for _, each := range list {
+			keyCollections = append(keyCollections, each.Key)
+		}
+	}
+	for index := 0; i < manager.ReduceNums; i++ {
+		for _, key := range keyCollections {
+			if ihash(key) == index {
+				// Expect to use channel to send key to special ReduceHandle
+			}
+		}
+	}
+
 
 }
 

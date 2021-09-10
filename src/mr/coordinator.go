@@ -19,6 +19,7 @@ type Coordinator struct {
 	nReduce int
 	// Every worker state
 	states []int
+	Files []string
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -34,6 +35,9 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 }
 
 func (c *Coordinator) HandleWorkerRequest(args *WorkerRequest, reply *WorkerResponse) error {
+	reply.MapNums = c.nMap
+	reply.ReduceNums = c.nReduce
+	reply.Files = c.Files
 	return nil
 }
 
@@ -47,6 +51,7 @@ func (c *Coordinator) server() {
 	//l, e := net.Listen("tcp", ":1234")
 	sockname := coordinatorSock()
 	os.Remove(sockname)
+	// Listen and server, and client can call Coordinator's function.
 	l, e := net.Listen("unix", sockname)
 	if e != nil {
 		log.Fatal("listen error:", e)
@@ -79,6 +84,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	fnums := len(files)
 	c.nMap = fnums
 	c.nReduce = nReduce
+	c.Files = files
 
 
 	c.server()
