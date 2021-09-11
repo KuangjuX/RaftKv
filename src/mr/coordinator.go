@@ -18,7 +18,8 @@ type Coordinator struct {
 	nMap int
 	nReduce int
 	// Every worker state
-	states []int
+	MapState []int
+	ReduceState []int
 	Files []string
 }
 

@@ -45,10 +45,10 @@ func ihash(key string) int {
 }
 
 // Map handler
-func HandleMap(index int, mapf func(string, string) []KeyValue, fileChan chan string, wg *sync.WaitGroup){
+func HandleMap(index int, mapf func(string, string) []KeyValue, InputChan chan string, OutputChan chan int, wg *sync.WaitGroup){
 	defer wg.Done()
 	intermediate := make([]KeyValue, 0)
-	for filename := range fileChan {
+	for filename := range InputChan {
 		file, err := os.Open(filename)
 		if err != nil {
 			log.Fatalf("cannot open %v", filename)
@@ -59,7 +59,6 @@ func HandleMap(index int, mapf func(string, string) []KeyValue, fileChan chan st
 		}
 
 		kva := mapf(filename, string(content))
-		//fmt.Printf("[Debug] key-value : %+v", kva)
 		intermediate = append(intermediate, kva...)
 	}
 
@@ -72,6 +71,7 @@ func HandleMap(index int, mapf func(string, string) []KeyValue, fileChan chan st
 	if err != nil {
 		log.Fatalf("cannot write file %v", writeFileName)
 	}
+	OutputChan <- index
 
 }
 
@@ -83,11 +83,12 @@ func HandleReduce(MapList []KeyValue, KvReduce *[]KeyValue, wg *sync.WaitGroup) 
 func (manager *WorkerManager)scheduler() {
 	//mapList := make([][]KeyValue, manager.MapNums)
 	manager.MapChan =  make([]chan string, 0)
+	MapStateChan := make(chan int)
 	wg := sync.WaitGroup{}
 	for i := 0; i < manager.MapNums; i++ {
 		wg.Add(1)
 		manager.MapChan = append(manager.MapChan, make(chan string))
-		go HandleMap(i, manager.MapF, manager.MapChan[i], &wg)
+		go HandleMap(i, manager.MapF, manager.MapChan[i], MapStateChan, &wg)
 	}
 
 	// Select filename to send special map goroutine
