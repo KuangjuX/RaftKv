@@ -2,6 +2,8 @@ package mr
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"sync"
 )
 import "log"
@@ -19,12 +21,15 @@ type KeyValue struct {
 
 
 type  WorkerManager struct {
-	MapChan []chan int
-	ReduceChan []chan int
+	MapChan []chan string
+	ReduceChan []chan string
 	MapNums int
 	ReduceNums int
 	InputFiles []string
+	MapF func(string, string) []KeyValue
+	ReduceF func(string, []string) string
 }
+
 
 //
 // use ihash(key) % NReduce to choose the reduce
@@ -37,41 +42,51 @@ func ihash(key string) int {
 }
 
 // Map handler
-func HandleMap(filename string, KvMap *[]KeyValue, wg *sync.WaitGroup){
-	wg.Done()
+func HandleMap(mapf func(string, string) []KeyValue, fileChan chan string, wg *sync.WaitGroup){
+	defer wg.Done()
+	for filename := range fileChan {
+		intermediate := make([]KeyValue, 0)
+		file, err := os.Open(filename)
+		if err != nil {
+			log.Fatalf("cannot open %v", filename)
+		}
+		content, err := io.ReadAll(file)
+		if err != nil {
+			log.Fatalf("cannot read %v", filename)
+		}
+
+		kva := mapf(filename, string(content))
+		println("[Debug] key-value : %v", kva)
+		intermediate = append(intermediate, kva...)
+	}
 }
 
 func HandleReduce(MapList []KeyValue, KvReduce *[]KeyValue, wg *sync.WaitGroup) {
-	wg.Done()
+	defer wg.Done()
 }
 
 // WorkerManager schedule how to execute map and reduce functions
 func (manager *WorkerManager)scheduler() {
-	mapList := make([][]KeyValue, manager.MapNums)
+	//mapList := make([][]KeyValue, manager.MapNums)
+	manager.MapChan =  make([]chan string, 0)
 	wg := sync.WaitGroup{}
-	for index, filename := range manager.InputFiles {
-		go HandleMap(filename, &mapList[index], &wg)
+	for i := 0; i < manager.MapNums; i++ {
 		wg.Add(1)
+		manager.MapChan = append(manager.MapChan, make(chan string))
+		go HandleMap(manager.MapF, manager.MapChan[i], &wg)
+	}
+
+	// Select filename to send special map goroutine
+	for _ , filename := range manager.InputFiles {
+		index := ihash(filename) % manager.MapNums
+		manager.MapChan[index] <- filename
+	}
+	// Close input channel since no more jobs are being sent to input channel
+	for i := 0; i < manager.MapNums; i++ {
+		close(manager.MapChan[i])
 	}
 	// Wait for all map goroutine to execute.
 	wg.Wait()
-	// Write files by key-value list
-	// Collection all the key of mapList
-	keyCollections := make([]string, 0)
-	for _, list := range mapList {
-		for _, each := range list {
-			keyCollections = append(keyCollections, each.Key)
-		}
-	}
-	for index := 0; index < manager.ReduceNums; index++ {
-		for _, key := range keyCollections {
-			if ihash(key) == index {
-				// Expect to use channel to send key to special ReduceHndle
-			}
-		}
-	}
-
-
 }
 
 
