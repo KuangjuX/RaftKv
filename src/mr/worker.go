@@ -1,9 +1,12 @@
 package mr
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"os"
+	"strconv"
 	"sync"
 )
 import "log"
@@ -42,10 +45,10 @@ func ihash(key string) int {
 }
 
 // Map handler
-func HandleMap(mapf func(string, string) []KeyValue, fileChan chan string, wg *sync.WaitGroup){
+func HandleMap(index int, mapf func(string, string) []KeyValue, fileChan chan string, wg *sync.WaitGroup){
 	defer wg.Done()
+	intermediate := make([]KeyValue, 0)
 	for filename := range fileChan {
-		intermediate := make([]KeyValue, 0)
 		file, err := os.Open(filename)
 		if err != nil {
 			log.Fatalf("cannot open %v", filename)
@@ -56,9 +59,20 @@ func HandleMap(mapf func(string, string) []KeyValue, fileChan chan string, wg *s
 		}
 
 		kva := mapf(filename, string(content))
-		println("[Debug] key-value : %v", kva)
+		//fmt.Printf("[Debug] key-value : %+v", kva)
 		intermediate = append(intermediate, kva...)
 	}
+
+	data, err := json.Marshal(intermediate)
+	if err != nil {
+		log.Fatalf("Fail to convert intermediate into string")
+	}
+	writeFileName := "map-" + strconv.FormatInt(int64(index), 10)
+	err = ioutil.WriteFile(writeFileName, data, 0644)
+	if err != nil {
+		log.Fatalf("cannot write file %v", writeFileName)
+	}
+
 }
 
 func HandleReduce(MapList []KeyValue, KvReduce *[]KeyValue, wg *sync.WaitGroup) {
@@ -73,7 +87,7 @@ func (manager *WorkerManager)scheduler() {
 	for i := 0; i < manager.MapNums; i++ {
 		wg.Add(1)
 		manager.MapChan = append(manager.MapChan, make(chan string))
-		go HandleMap(manager.MapF, manager.MapChan[i], &wg)
+		go HandleMap(i, manager.MapF, manager.MapChan[i], &wg)
 	}
 
 	// Select filename to send special map goroutine
@@ -103,6 +117,17 @@ func Worker(mapf func(string, string) []KeyValue,
 	response := WorkerResponse{}
 	RequestMaster(&request, &response)
 
+	// Initialize worker manager
+	var manager WorkerManager
+	manager.MapF = mapf
+	manager.ReduceF = reducef
+	manager.ReduceNums = response.ReduceNums
+	manager.MapNums = response.MapNums
+	manager.InputFiles = response.Files
+
+	// Start manager schedule algorithm
+	manager.scheduler()
+
 }
 
 //
@@ -130,12 +155,9 @@ func CallExample() {
 
 func RequestMaster(request *WorkerRequest, response *WorkerResponse) {
 
-	call("Worker", request, response)
+	call("Coordinator.HandleWorkerRequest", request, response)
 }
 
-func MapHandler(filename string) {
-
-}
 
 //
 // send an RPC request to the coordinator, wait for the response.
