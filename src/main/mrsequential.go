@@ -6,13 +6,16 @@ package main
 // go run mrsequential.go wc.so pg*.txt
 //
 
-import "fmt"
-import "6.824/mr"
-import "plugin"
-import "os"
-import "log"
-import "io/ioutil"
-import "sort"
+import (
+	"fmt"
+	"io/ioutil"
+	"log"
+	"os"
+	"plugin"
+	"sort"
+
+	"6.824/mr"
+)
 
 // for sorting by key.
 type ByKey []mr.KeyValue
@@ -21,6 +24,11 @@ type ByKey []mr.KeyValue
 func (a ByKey) Len() int           { return len(a) }
 func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
+
+type ReduceList struct {
+	Key    string
+	Values []string
+}
 
 func main() {
 	// 判断输入参数，参数必须为3

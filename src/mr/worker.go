@@ -28,9 +28,14 @@ type KeyValue struct {
 	Value string
 }
 
+type ReduceData struct {
+	Key    string
+	Values []string
+}
+
 type WorkerManager struct {
 	MapChan    []chan string
-	ReduceChan []chan string
+	ReduceChan []chan ReduceData
 	MapNums    int
 	ReduceNums int
 	InputFiles []string
@@ -96,8 +101,7 @@ func (manager *WorkerManager) HandleMap(
 func (manager *WorkerManager) HandleReduce(
 	index int,
 	reducef func(string, []string) string,
-	mapData []KeyValue,
-	KeyChan chan string,
+	ReduceChan chan ReduceData,
 	wg *sync.WaitGroup) {
 	defer wg.Done()
 
@@ -111,25 +115,14 @@ func (manager *WorkerManager) HandleReduce(
 
 	OutFileName := "reduce-" + strconv.FormatInt(int64(index), 10)
 	OutFile, _ := os.Create(OutFileName)
-	for key := range KeyChan {
-		i := 0
-		for i < len(mapData) {
-			j := i + 1
-			for j < len(mapData) && mapData[j].Key == mapData[i].Key {
-				j++
-			}
-			values := make([]string, 0)
-
-			for k := i; k < j; k++ {
-				values = append(values, mapData[k].Value)
-			}
-
-			output := reducef(key, values)
-			_, _ = fmt.Fprintf(OutFile, "%v %v\n", mapData[i].Key, output)
-
-			i = j
+	for each := range ReduceChan {
+		values := make([]string, 0)
+		for _, value := range each.Values {
+			values = append(values, value)
 		}
-		fmt.Printf("[Debug] Run key %s\n", key)
+		output := reducef(each.Key, values)
+		_, _ = fmt.Fprintf(OutFile, "%v %v\n", each.Key, output)
+		fmt.Printf("[Debug] Run key %s\n", each.Key)
 	}
 
 	req.State = Completed
@@ -141,7 +134,7 @@ func (manager *WorkerManager) HandleReduce(
 // WorkerManager schedule how to execute map and reduce functions
 func (manager *WorkerManager) scheduler() error {
 	manager.MapChan = make([]chan string, 0)
-	manager.ReduceChan = make([]chan string, 0)
+	manager.ReduceChan = make([]chan ReduceData, 0)
 	wg := sync.WaitGroup{}
 	for i := 0; i < manager.MapNums; i++ {
 		wg.Add(1)
@@ -196,11 +189,10 @@ func (manager *WorkerManager) scheduler() error {
 	// Start reduce
 	for i := 0; i < manager.ReduceNums; i++ {
 		wg.Add(1)
-		manager.ReduceChan = append(manager.ReduceChan, make(chan string, 1000))
+		manager.ReduceChan = append(manager.ReduceChan, make(chan ReduceData, 1000))
 		go manager.HandleReduce(
 			i,
 			manager.ReduceF,
-			mapData,
 			manager.ReduceChan[i],
 			&wg)
 	}
@@ -216,8 +208,16 @@ func (manager *WorkerManager) scheduler() error {
 		for j < len(mapData) && mapData[j].Key == mapData[i].Key {
 			j++
 		}
+		values := make([]string, 0)
+		for k := i; k < j; k++ {
+			values = append(values, mapData[k].Value)
+		}
+		data := ReduceData{
+			Key:    mapData[i].Key,
+			Values: values,
+		}
 		hash := ihash(mapData[i].Key) % manager.ReduceNums
-		manager.ReduceChan[hash] <- mapData[i].Key
+		manager.ReduceChan[hash] <- data
 		i = j
 	}
 
