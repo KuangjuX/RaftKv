@@ -13,6 +13,11 @@ const (
 	Completed = 3
 )
 
+const (
+	Map = 0
+	Reduce = 1
+)
+
 type Coordinator struct {
 	// Your definitions here.
 	nMap int
@@ -20,6 +25,7 @@ type Coordinator struct {
 	// Every worker state
 	MapState []int
 	ReduceState []int
+	// Input filenames
 	Files []string
 }
 
@@ -39,6 +45,17 @@ func (c *Coordinator) HandleWorkerRequest(args *WorkerRequest, reply *WorkerResp
 	reply.MapNums = c.nMap
 	reply.ReduceNums = c.nReduce
 	reply.Files = c.Files
+	return nil
+}
+
+func (c *Coordinator) HandleWorkerState(req *WorkerStateReq, rsp *WorkerStateRsp) error {
+	WorkerType := req.machineType
+	if WorkerType == Map {
+		c.MapState[req.index] = req.state
+	}else if WorkerType == Reduce {
+		c.ReduceState[req.index] = req.state
+	}
+
 	return nil
 }
 
@@ -86,7 +103,15 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c.nMap = fnums
 	c.nReduce = nReduce
 	c.Files = files
+	c.MapState = make([]int, c.nMap)
+	c.ReduceState = make([]int, c.nReduce)
+	for i := 0; i < c.nMap; i++ {
+		c.MapState[i] = Idle
+	}
 
+	for i := 0; i < c.nReduce; i++ {
+		c.ReduceState[i] = Idle
+	}
 
 	c.server()
 	return &c

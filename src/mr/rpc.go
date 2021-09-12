@@ -34,6 +34,19 @@ type WorkerResponse struct {
 	Files []string
 }
 
+type WorkerStateReq struct {
+	// worker machine id
+	index int
+	// worker machine type, 0 for mao, 1 for reduce
+	machineType int
+	// worker machine state
+	state       int
+}
+
+type WorkerStateRsp struct {
+
+}
+
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
