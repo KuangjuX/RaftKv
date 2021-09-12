@@ -101,13 +101,13 @@ func (manager *WorkerManager) HandleReduce(
 	wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	// req := WorkerStateReq{
-	// 	Index:       index,
-	// 	MachineType: Reduce,
-	// 	State:       Progress,
-	// }
-	// rsp := WorkerStateRsp{}
-	// MachineCommunicate(&req, &rsp)
+	req := WorkerStateReq{
+		Index:       index,
+		MachineType: Reduce,
+		State:       Progress,
+	}
+	rsp := WorkerStateRsp{}
+	MachineCommunicate(&req, &rsp)
 
 	OutFileName := "reduce-" + strconv.FormatInt(int64(index), 10)
 	OutFile, _ := os.Create(OutFileName)
@@ -129,10 +129,11 @@ func (manager *WorkerManager) HandleReduce(
 
 			i = j
 		}
+		fmt.Printf("[Debug] Run key %s\n", key)
 	}
 
-	// req.State = Completed
-	// MachineCommunicate(&req, &rsp)
+	req.State = Completed
+	MachineCommunicate(&req, &rsp)
 	fmt.Printf("[Debug] Reduce worker %v finished\n", index)
 
 }
@@ -161,6 +162,8 @@ func (manager *WorkerManager) scheduler() error {
 	for i := 0; i < manager.MapNums; i++ {
 		close(manager.MapChan[i])
 	}
+
+	fmt.Print("[Debug] Wait Map machines to end.\n")
 	// Wait for all map goroutine to execute.
 	wg.Wait()
 	// Send to Master to ask for if start reduce
@@ -187,13 +190,13 @@ func (manager *WorkerManager) scheduler() error {
 	}
 
 	sort.Sort(ByKey(mapData))
-	keys := FindKeys(mapData)
+	// keys := FindKeys(mapData)
 	wg = sync.WaitGroup{}
 
 	// Start reduce
 	for i := 0; i < manager.ReduceNums; i++ {
 		wg.Add(1)
-		manager.ReduceChan = append(manager.ReduceChan, make(chan string))
+		manager.ReduceChan = append(manager.ReduceChan, make(chan string, 1000))
 		go manager.HandleReduce(
 			i,
 			manager.ReduceF,
@@ -202,15 +205,27 @@ func (manager *WorkerManager) scheduler() error {
 			&wg)
 	}
 
-	for _, key := range keys {
-		hash := ihash(key) % manager.ReduceNums
-		manager.ReduceChan[hash] <- key
+	// for _, key := range keys {
+	// 	hash := ihash(key) % manager.ReduceNums
+	// 	manager.ReduceChan[hash] <- key
+	// }
+
+	i := 0
+	for i < len(mapData) {
+		j := i + 1
+		for j < len(mapData) && mapData[j].Key == mapData[i].Key {
+			j++
+		}
+		hash := ihash(mapData[i].Key) % manager.ReduceNums
+		manager.ReduceChan[hash] <- mapData[i].Key
+		i = j
 	}
 
 	for i := 0; i < manager.ReduceNums; i++ {
 		close(manager.ReduceChan[i])
 	}
 
+	fmt.Print("[Debug] Wait Reduce machines to end.\n")
 	wg.Wait()
 	print("[Debug] Worker finish to execute.\n")
 	return nil
