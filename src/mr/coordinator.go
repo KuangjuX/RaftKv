@@ -1,29 +1,30 @@
 package mr
 
-import "log"
-import "net"
-import "os"
-import "net/rpc"
-import "net/http"
-
+import (
+	"log"
+	"net"
+	"net/http"
+	"net/rpc"
+	"os"
+)
 
 const (
-	Idle = 1
-	Progress = 2
+	Idle      = 1
+	Progress  = 2
 	Completed = 3
 )
 
 const (
-	Map = 0
+	Map    = 0
 	Reduce = 1
 )
 
 type Coordinator struct {
 	// Your definitions here.
-	nMap int
+	nMap    int
 	nReduce int
 	// Every worker state
-	MapState []int
+	MapState    []int
 	ReduceState []int
 	// Input filenames
 	Files []string
@@ -49,16 +50,15 @@ func (c *Coordinator) HandleWorkerRequest(args *WorkerRequest, reply *WorkerResp
 }
 
 func (c *Coordinator) HandleWorkerState(req *WorkerStateReq, rsp *WorkerStateRsp) error {
-	WorkerType := req.machineType
+	WorkerType := req.MachineType
 	if WorkerType == Map {
-		c.MapState[req.index] = req.state
-	}else if WorkerType == Reduce {
-		c.ReduceState[req.index] = req.state
+		c.MapState[req.Index] = req.State
+	} else if WorkerType == Reduce {
+		c.ReduceState[req.Index] = req.State
 	}
 
 	return nil
 }
-
 
 //
 // start a thread that listens for RPCs from worker.go
@@ -85,7 +85,14 @@ func (c *Coordinator) Done() bool {
 	ret := false
 
 	// Your code here.
-
+	for i := 0; i < c.nReduce; i++ {
+		if c.ReduceState[i] == Completed {
+			ret = true
+		} else {
+			ret = false
+			break
+		}
+	}
 
 	return ret
 }

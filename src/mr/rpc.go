@@ -36,11 +36,11 @@ type WorkerResponse struct {
 
 type WorkerStateReq struct {
 	// worker machine id
-	index int
+	Index int
 	// worker machine type, 0 for mao, 1 for reduce
-	machineType int
+	MachineType int
 	// worker machine state
-	state       int
+	State       int
 }
 
 type WorkerStateRsp struct {

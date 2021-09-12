@@ -3,23 +3,23 @@ package mr
 import (
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"io/ioutil"
+	"log"
+	"net/rpc"
 	"os"
 	"sort"
 	"strconv"
 	"sync"
 )
-import "log"
-import "net/rpc"
-import "hash/fnv"
-
-
 
 type ByKey []KeyValue
+
 func (a ByKey) Len() int           { return len(a) }
 func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
+
 //
 // Map functions return a slice of KeyValue.
 //
@@ -28,17 +28,15 @@ type KeyValue struct {
 	Value string
 }
 
-
-type  WorkerManager struct {
-	MapChan []chan string
+type WorkerManager struct {
+	MapChan    []chan string
 	ReduceChan []chan string
-	MapNums int
+	MapNums    int
 	ReduceNums int
 	InputFiles []string
-	MapF func(string, string) []KeyValue
-	ReduceF func(string, []string) string
+	MapF       func(string, string) []KeyValue
+	ReduceF    func(string, []string) string
 }
-
 
 //
 // use ihash(key) % NReduce to choose the reduce
@@ -51,12 +49,16 @@ func ihash(key string) int {
 }
 
 // Map handler
-func (manager *WorkerManager)HandleMap(index int, mapf func(string, string) []KeyValue, InputChan chan string, wg *sync.WaitGroup){
+func (manager *WorkerManager) HandleMap(
+	index int,
+	mapf func(string, string) []KeyValue,
+	InputChan chan string,
+	wg *sync.WaitGroup) {
 	defer wg.Done()
 	req := WorkerStateReq{
-		index: index,
-		machineType: Map,
-		state: Progress,
+		Index:       index,
+		MachineType: Map,
+		State:       Progress,
 	}
 	rsp := WorkerStateRsp{}
 	MachineCommunicate(&req, &rsp)
@@ -86,12 +88,81 @@ func (manager *WorkerManager)HandleMap(index int, mapf func(string, string) []Ke
 	}
 
 	// Send RPC to master to tell current task is done
-	req.state = Completed
+	req.State = Completed
 	MachineCommunicate(&req, &rsp)
 }
 
-func (manager* WorkerManager)HandleReduce(index int, reducef func(string, []string) string ,KeyChan chan string, wg *sync.WaitGroup) {
+func (manager *WorkerManager) HandleReduce(
+	index int,
+	reducef func(string, []string) string,
+	mapData []KeyValue,
+	KeyChan chan string,
+	wg *sync.WaitGroup) {
 	defer wg.Done()
+
+	req := WorkerStateReq{
+		Index:       index,
+		MachineType: Reduce,
+		State:       Progress,
+	}
+	rsp := WorkerStateRsp{}
+	MachineCommunicate(&req, &rsp)
+
+	OutFileName := "reduce-" + strconv.FormatInt(int64(index), 10)
+	OutFile, _ := os.Create(OutFileName)
+	for key := range KeyChan {
+		i := 0
+		for i < len(mapData) {
+			j := i + 1
+			for j < len(mapData) && mapData[j].Key == mapData[i].Key {
+				j++
+			}
+			values := make([]string, 0)
+
+			for k := i; k < j; k++ {
+				values = append(values, mapData[k].Value)
+			}
+
+			output := reducef(key, values)
+			_, _ = fmt.Fprintf(OutFile, "%v %v\n", mapData[i].Key, output)
+
+			i = j
+		}
+	}
+
+	req.State = Completed
+	MachineCommunicate(&req, &rsp)
+
+}
+
+// WorkerManager schedule how to execute map and reduce functions
+func (manager *WorkerManager) scheduler() error {
+	manager.MapChan = make([]chan string, 0)
+	manager.ReduceChan = make([]chan string, 0)
+	wg := sync.WaitGroup{}
+	for i := 0; i < manager.MapNums; i++ {
+		wg.Add(1)
+		manager.MapChan = append(manager.MapChan, make(chan string))
+		go manager.HandleMap(
+			i,
+			manager.MapF,
+			manager.MapChan[i],
+			&wg)
+	}
+
+	// Select filename to send special map goroutine
+	for _, filename := range manager.InputFiles {
+		index := ihash(filename) % manager.MapNums
+		manager.MapChan[index] <- filename
+	}
+	// Close input channel since no more jobs are being sent to input channel
+	for i := 0; i < manager.MapNums; i++ {
+		close(manager.MapChan[i])
+	}
+	// Wait for all map goroutine to execute.
+	wg.Wait()
+	// Send to Master to ask for if start reduce
+
 	// Read all data from intermediate
 	var mapData []KeyValue
 	for i := 0; i < manager.MapNums; i++ {
@@ -114,57 +185,32 @@ func (manager* WorkerManager)HandleReduce(index int, reducef func(string, []stri
 	}
 
 	sort.Sort(ByKey(mapData))
-
-	OutFileName := "reduce-" + strconv.FormatInt(int64(index), 10)
-	OutFile, _ := os.Create(OutFileName)
-	for key := range KeyChan {
-		i := 0
-		for i < len(mapData) {
-			j := i + 1
-			for j < len(mapData) && mapData[j].Key == mapData[i].Key {
-				j ++
-			}
-			values := make([]string, 0)
-
-			for k := i; k < j; k++ {
-				values = append(values, mapData[k].Value)
-			}
-
-			output := reducef(key, values)
-			fmt.Fprintf(OutFile, "%v %v\n", mapData[i].Key, output)
-
-			i = j
-		}
-	}
-
-}
-
-// WorkerManager schedule how to execute map and reduce functions
-func (manager *WorkerManager)scheduler() {
-	manager.MapChan =  make([]chan string, 0)
-	wg := sync.WaitGroup{}
-	for i := 0; i < manager.MapNums; i++ {
-		wg.Add(1)
-		manager.MapChan = append(manager.MapChan, make(chan string))
-		go manager.HandleMap(i, manager.MapF, manager.MapChan[i], &wg)
-	}
-
-	// Select filename to send special map goroutine
-	for _ , filename := range manager.InputFiles {
-		index := ihash(filename) % manager.MapNums
-		manager.MapChan[index] <- filename
-	}
-	// Close input channel since no more jobs are being sent to input channel
-	for i := 0; i < manager.MapNums; i++ {
-		close(manager.MapChan[i])
-	}
-	// Wait for all map goroutine to execute.
-	wg.Wait()
-	// Send to Master to ask for if start reduce
+	keys := FindKeys(mapData)
 
 	// Start reduce
-}
+	for i := 0; i < manager.ReduceNums; i++ {
+		manager.ReduceChan = append(manager.ReduceChan, make(chan string))
+		go manager.HandleReduce(
+			i,
+			manager.ReduceF,
+			mapData,
+			manager.ReduceChan[i],
+			&wg)
+	}
 
+	for _, key := range keys {
+		hash := ihash(key) % manager.ReduceNums
+		manager.ReduceChan[hash] <- key
+	}
+
+	for i := 0; i < manager.ReduceNums; i++ {
+		close(manager.ReduceChan[i])
+	}
+
+	wg.Wait()
+	print("[Debug] Worker finish to execute.\n")
+	return nil
+}
 
 //
 // main/mrworker.go calls this function.
@@ -188,7 +234,11 @@ func Worker(mapf func(string, string) []KeyValue,
 	manager.InputFiles = response.Files
 
 	// Start manager schedule algorithm
-	manager.scheduler()
+	err := manager.scheduler()
+
+	if err != nil {
+		log.Fatalf("fail to scheduler.\n")
+	}
 
 }
 
@@ -224,7 +274,6 @@ func MachineCommunicate(req *WorkerStateReq, rsp *WorkerStateRsp) {
 	call("Coordinator.HandleWorkerState", req, rsp)
 }
 
-
 //
 // send an RPC request to the coordinator, wait for the response.
 // usually returns true.
@@ -247,4 +296,18 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 
 	fmt.Println(err)
 	return false
+}
+
+func FindKeys(mapData []KeyValue) []string {
+	keys := make([]string, 0)
+	i := 0
+	for i < len(mapData) {
+		j := i + 1
+		for j < len(mapData) && mapData[j].Key == mapData[i].Key {
+			j++
+		}
+		keys = append(keys, mapData[i].Key)
+		i = j
+	}
+	return keys
 }
