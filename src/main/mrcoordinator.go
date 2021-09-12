@@ -24,7 +24,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	m := mr.MakeCoordinator(os.Args[1:], 100)
+	m := mr.MakeCoordinator(os.Args[1:], 10)
 	// check if the tasks finished
 	for m.Done() == false {
 		time.Sleep(time.Second)
