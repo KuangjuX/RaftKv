@@ -4,7 +4,7 @@ ExecFile = wc.so
 .PHONY: build master worker clean
 
 build:
-	go build -race -buildmode=plugin ../mrapps/$(UserProg)
+	@go build -race -buildmode=plugin ../mrapps/$(UserProg)
 
 master:
 	@go run -race mrcoordinator.go pg-*.txt

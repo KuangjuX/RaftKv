@@ -90,6 +90,7 @@ func (manager *WorkerManager) HandleMap(
 	// Send RPC to master to tell current task is done
 	req.State = Completed
 	MachineCommunicate(&req, &rsp)
+	fmt.Printf("[Debug] Map worker %v finished\n", index)
 }
 
 func (manager *WorkerManager) HandleReduce(
@@ -100,13 +101,13 @@ func (manager *WorkerManager) HandleReduce(
 	wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	req := WorkerStateReq{
-		Index:       index,
-		MachineType: Reduce,
-		State:       Progress,
-	}
-	rsp := WorkerStateRsp{}
-	MachineCommunicate(&req, &rsp)
+	// req := WorkerStateReq{
+	// 	Index:       index,
+	// 	MachineType: Reduce,
+	// 	State:       Progress,
+	// }
+	// rsp := WorkerStateRsp{}
+	// MachineCommunicate(&req, &rsp)
 
 	OutFileName := "reduce-" + strconv.FormatInt(int64(index), 10)
 	OutFile, _ := os.Create(OutFileName)
@@ -130,8 +131,9 @@ func (manager *WorkerManager) HandleReduce(
 		}
 	}
 
-	req.State = Completed
-	MachineCommunicate(&req, &rsp)
+	// req.State = Completed
+	// MachineCommunicate(&req, &rsp)
+	fmt.Printf("[Debug] Reduce worker %v finished\n", index)
 
 }
 
@@ -186,9 +188,11 @@ func (manager *WorkerManager) scheduler() error {
 
 	sort.Sort(ByKey(mapData))
 	keys := FindKeys(mapData)
+	wg = sync.WaitGroup{}
 
 	// Start reduce
 	for i := 0; i < manager.ReduceNums; i++ {
+		wg.Add(1)
 		manager.ReduceChan = append(manager.ReduceChan, make(chan string))
 		go manager.HandleReduce(
 			i,

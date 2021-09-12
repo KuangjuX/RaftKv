@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
+	"sync"
 )
 
 const (
@@ -21,8 +22,9 @@ const (
 
 type Coordinator struct {
 	// Your definitions here.
-	nMap    int
-	nReduce int
+	StateLock sync.Mutex
+	nMap      int
+	nReduce   int
 	// Every worker state
 	MapState    []int
 	ReduceState []int
@@ -51,11 +53,14 @@ func (c *Coordinator) HandleWorkerRequest(args *WorkerRequest, reply *WorkerResp
 
 func (c *Coordinator) HandleWorkerState(req *WorkerStateReq, rsp *WorkerStateRsp) error {
 	WorkerType := req.MachineType
+
+	c.StateLock.Lock()
 	if WorkerType == Map {
 		c.MapState[req.Index] = req.State
 	} else if WorkerType == Reduce {
 		c.ReduceState[req.Index] = req.State
 	}
+	c.StateLock.Unlock()
 
 	return nil
 }
