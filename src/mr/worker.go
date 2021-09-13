@@ -256,6 +256,15 @@ func RunMapJob(task MapTask) {
 }
 
 func RunReduceJob(task ReduceTask) {
+	OutFileName := "mr-out-" + strconv.FormatInt(int64(task.ReduceID+1), 10)
+	OutFile, _ := os.Create(OutFileName)
+	for _, each := range task.Bucket.Data {
+		output := task.ReduceFunction(each.Key, each.Values)
+		_, _ = fmt.Fprintf(OutFile, "%v %v\n", each.Key, output)
+	}
+}
+
+func RunExitJob() {
 
 }
 
@@ -286,7 +295,7 @@ func Worker(mapf func(string, string) []KeyValue,
 	// if err != nil {
 	// 	log.Fatalf("fail to scheduler.\n")
 	// }
-
+Event:
 	for {
 		req := TaskRequest{}
 		rsp := TaskResponse{}
@@ -303,6 +312,8 @@ func Worker(mapf func(string, string) []KeyValue,
 			RunReduceJob(rsp.ReduceTask)
 		case Exit:
 			// Call Master to finishe
+			RunExitJob()
+			break Event
 		}
 	}
 

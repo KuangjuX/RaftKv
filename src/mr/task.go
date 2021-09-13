@@ -7,9 +7,9 @@ type MapTask struct {
 }
 
 type ReduceTask struct {
-	ReduceID int
-	Key      string
-	Values   []string
+	ReduceID       int
+	Bucket         ReduceBucket
+	ReduceFunction func(string, []string) string
 }
 
 type MapTaskAllocated struct {

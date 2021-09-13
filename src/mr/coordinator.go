@@ -25,6 +25,9 @@ type Coordinator struct {
 	MapLock    sync.Mutex
 	ReduceLock sync.Mutex
 
+	MapFunction    func(string, string) []KeyValue
+	ReduceFunction func(string, []string) string
+
 	nMap    int
 	nReduce int
 	// Every worker state
@@ -79,6 +82,39 @@ func (c *Coordinator) HandleWorkerState(req *WorkerStateReq, rsp *WorkerStateRsp
 }
 
 func (c *Coordinator) RequestTask(req *TaskRequest, rsp *TaskResponse) error {
+	mapEnd := true
+	for i := 0; i < len(c.MapState); i++ {
+		if c.MapState[i] == Idle {
+			rsp.TaskStatus = Map
+			rsp.MapTask = MapTask{
+				MapID:       i,
+				MapFunction: c.MapFunction,
+			}
+			c.MapState[i] = Progress
+			return nil
+		} else if c.MapState[i] == Progress {
+			mapEnd = false
+		}
+	}
+
+	if !mapEnd {
+		rsp.TaskStatus = Wait
+		return nil
+	}
+
+	for i := 0; i < len(c.MapState); i++ {
+		if c.ReduceState[i] == Idle {
+			rsp.TaskStatus = Reduce
+			rsp.ReduceTask = ReduceTask{
+				ReduceID:       i,
+				Bucket:         c.Buckets[i],
+				ReduceFunction: c.ReduceFunction,
+			}
+		}
+	}
+
+	rsp.TaskStatus = Exit
+
 	return nil
 }
 
