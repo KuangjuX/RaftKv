@@ -15,4 +15,4 @@ worker: build
 clean:
 	@rm $(ExecFile)
 	@rm map-*
-	@rm reduce-*
+	@rm mr-out*

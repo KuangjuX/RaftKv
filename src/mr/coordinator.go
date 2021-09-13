@@ -23,9 +23,11 @@ const (
 
 type Coordinator struct {
 	// Your definitions here.
-	StateLock sync.Mutex
-	nMap      int
-	nReduce   int
+	MapLock    sync.Mutex
+	ReduceLock sync.Mutex
+
+	nMap    int
+	nReduce int
 	// Every worker state
 	MapState    []int
 	ReduceState []int
@@ -55,15 +57,17 @@ func (c *Coordinator) HandleWorkerRequest(args *WorkerRequest, reply *WorkerResp
 func (c *Coordinator) HandleWorkerState(req *WorkerStateReq, rsp *WorkerStateRsp) error {
 	WorkerType := req.MachineType
 
-	c.StateLock.Lock()
 	if WorkerType == Map {
+		c.MapLock.Lock()
 		c.MapState[req.Index] = req.State
+		c.MapLock.Unlock()
 		fmt.Printf("[Debug] Map machine %v %v.\n", req.Index, req.State)
 	} else if WorkerType == Reduce {
+		c.ReduceLock.Lock()
 		c.ReduceState[req.Index] = req.State
+		c.ReduceLock.Unlock()
 		fmt.Printf("[Debug] Reduce machine %v %v.\n", req.Index, req.State)
 	}
-	c.StateLock.Unlock()
 
 	return nil
 }
@@ -93,6 +97,8 @@ func (c *Coordinator) Done() bool {
 	ret := false
 
 	// Your code here.
+	c.ReduceLock.Lock()
+	defer c.ReduceLock.Unlock()
 	for i := 0; i < c.nReduce; i++ {
 		if c.ReduceState[i] == Completed {
 			ret = true

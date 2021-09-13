@@ -113,16 +113,12 @@ func (manager *WorkerManager) HandleReduce(
 	rsp := WorkerStateRsp{}
 	MachineCommunicate(&req, &rsp)
 
-	OutFileName := "reduce-" + strconv.FormatInt(int64(index), 10)
+	OutFileName := "mr-out-" + strconv.FormatInt(int64(index+1), 10)
 	OutFile, _ := os.Create(OutFileName)
 	for each := range ReduceChan {
-		values := make([]string, 0)
-		for _, value := range each.Values {
-			values = append(values, value)
-		}
-		output := reducef(each.Key, values)
+		output := reducef(each.Key, each.Values)
 		_, _ = fmt.Fprintf(OutFile, "%v %v\n", each.Key, output)
-		fmt.Printf("[Debug] Run key %s\n", each.Key)
+		// fmt.Printf("[Debug] Run key %s\n", each.Key)
 	}
 
 	req.State = Completed
@@ -156,9 +152,10 @@ func (manager *WorkerManager) scheduler() error {
 		close(manager.MapChan[i])
 	}
 
-	fmt.Print("[Debug] Wait Map machines to end.\n")
+	// fmt.Print("[Debug] Wait Map machines to end.\n")
 	// Wait for all map goroutine to execute.
 	wg.Wait()
+	print("[Debug] Map Worker finish to execute.\n")
 	// Send to Master to ask for if start reduce
 
 	// Read all data from intermediate
@@ -225,9 +222,9 @@ func (manager *WorkerManager) scheduler() error {
 		close(manager.ReduceChan[i])
 	}
 
-	fmt.Print("[Debug] Wait Reduce machines to end.\n")
+	// fmt.Print("[Debug] Wait Reduce machines to end.\n")
 	wg.Wait()
-	print("[Debug] Worker finish to execute.\n")
+	print("[Debug] Reduce Worker finish to execute.\n")
 	return nil
 }
 

@@ -25,11 +25,6 @@ func (a ByKey) Len() int           { return len(a) }
 func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
-type ReduceList struct {
-	Key    string
-	Values []string
-}
-
 func main() {
 	// 判断输入参数，参数必须为3
 	// [运行文件名， 输入的可执行程序， 测试文件]
