@@ -95,7 +95,7 @@ func (manager *WorkerManager) HandleMap(
 	// Send RPC to master to tell current task is done
 	req.State = Completed
 	MachineCommunicate(&req, &rsp)
-	fmt.Printf("[Debug] Map worker %v finished\n", index)
+	// fmt.Printf("[Debug] Map worker %v finished\n", index)
 }
 
 func (manager *WorkerManager) HandleReduce(
@@ -123,7 +123,7 @@ func (manager *WorkerManager) HandleReduce(
 
 	req.State = Completed
 	MachineCommunicate(&req, &rsp)
-	fmt.Printf("[Debug] Reduce worker %v finished\n", index)
+	// fmt.Printf("[Debug] Reduce worker %v finished\n", index)
 
 }
 
@@ -155,7 +155,7 @@ func (manager *WorkerManager) scheduler() error {
 	// fmt.Print("[Debug] Wait Map machines to end.\n")
 	// Wait for all map goroutine to execute.
 	wg.Wait()
-	print("[Debug] Map Worker finish to execute.\n")
+	// print("[Debug] Map Worker finish to execute.\n")
 	// Send to Master to ask for if start reduce
 
 	// Read all data from intermediate
@@ -224,7 +224,7 @@ func (manager *WorkerManager) scheduler() error {
 
 	// fmt.Print("[Debug] Wait Reduce machines to end.\n")
 	wg.Wait()
-	print("[Debug] Reduce Worker finish to execute.\n")
+	// print("[Debug] Reduce Worker finish to execute.\n")
 	return nil
 }
 

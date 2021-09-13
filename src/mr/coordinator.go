@@ -1,7 +1,6 @@
 package mr
 
 import (
-	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -61,12 +60,12 @@ func (c *Coordinator) HandleWorkerState(req *WorkerStateReq, rsp *WorkerStateRsp
 		c.MapLock.Lock()
 		c.MapState[req.Index] = req.State
 		c.MapLock.Unlock()
-		fmt.Printf("[Debug] Map machine %v %v.\n", req.Index, req.State)
+		// fmt.Printf("[Debug] Map machine %v %v.\n", req.Index, req.State)
 	} else if WorkerType == Reduce {
 		c.ReduceLock.Lock()
 		c.ReduceState[req.Index] = req.State
 		c.ReduceLock.Unlock()
-		fmt.Printf("[Debug] Reduce machine %v %v.\n", req.Index, req.State)
+		// fmt.Printf("[Debug] Reduce machine %v %v.\n", req.Index, req.State)
 	}
 
 	return nil
