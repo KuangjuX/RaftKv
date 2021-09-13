@@ -229,7 +229,7 @@ func (manager *WorkerManager) scheduler() error {
 	return nil
 }
 
-func RunMapJob(task MapTask) {
+func RunMapJob(task MapTask, handler func(string, string) []KeyValue) {
 	intermediate := make([]KeyValue, 0)
 	filename := task.FileName
 	file, err := os.Open(filename)
@@ -241,7 +241,7 @@ func RunMapJob(task MapTask) {
 		log.Fatalf("cannot read %v", filename)
 	}
 
-	kva := task.MapFunction(filename, string(content))
+	kva := handler(filename, string(content))
 	intermediate = append(intermediate, kva...)
 
 	data, err := json.Marshal(intermediate)
@@ -255,11 +255,11 @@ func RunMapJob(task MapTask) {
 	}
 }
 
-func RunReduceJob(task ReduceTask) {
+func RunReduceJob(task ReduceTask, handler func(string, []string) string) {
 	OutFileName := "mr-out-" + strconv.FormatInt(int64(task.ReduceID+1), 10)
 	OutFile, _ := os.Create(OutFileName)
 	for _, each := range task.Bucket.Data {
-		output := task.ReduceFunction(each.Key, each.Values)
+		output := handler(each.Key, each.Values)
 		_, _ = fmt.Fprintf(OutFile, "%v %v\n", each.Key, output)
 	}
 }
@@ -306,10 +306,10 @@ Event:
 			time.Sleep(time.Duration(1) * time.Second)
 		case RunMapTask:
 			// Run Map Task
-			RunMapJob(rsp.MapTask)
+			RunMapJob(rsp.MapTask, mapf)
 		case RunReduceTask:
 			// Run Reduce Task
-			RunReduceJob(rsp.ReduceTask)
+			RunReduceJob(rsp.ReduceTask, reducef)
 		case Exit:
 			// Call Master to finishe
 			RunExitJob()

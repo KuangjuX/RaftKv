@@ -25,9 +25,6 @@ type Coordinator struct {
 	MapLock    sync.Mutex
 	ReduceLock sync.Mutex
 
-	MapFunction    func(string, string) []KeyValue
-	ReduceFunction func(string, []string) string
-
 	nMap    int
 	nReduce int
 	// Every worker state
@@ -87,8 +84,7 @@ func (c *Coordinator) RequestTask(req *TaskRequest, rsp *TaskResponse) error {
 		if c.MapState[i] == Idle {
 			rsp.TaskStatus = Map
 			rsp.MapTask = MapTask{
-				MapID:       i,
-				MapFunction: c.MapFunction,
+				MapID: i,
 			}
 			c.MapState[i] = Progress
 			return nil
@@ -106,9 +102,8 @@ func (c *Coordinator) RequestTask(req *TaskRequest, rsp *TaskResponse) error {
 		if c.ReduceState[i] == Idle {
 			rsp.TaskStatus = Reduce
 			rsp.ReduceTask = ReduceTask{
-				ReduceID:       i,
-				Bucket:         c.Buckets[i],
-				ReduceFunction: c.ReduceFunction,
+				ReduceID: i,
+				Bucket:   c.Buckets[i],
 			}
 		}
 	}
@@ -166,8 +161,8 @@ func (c *Coordinator) Done() bool {
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 	// Your code here.
-	fnums := len(files)
-	c.nMap = fnums
+	// Initialize Coordiantor
+	c.nMap = len(files)
 	c.nReduce = nReduce
 	c.Files = files
 	c.MapState = make([]int, c.nMap)

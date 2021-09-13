@@ -1,15 +1,13 @@
 package mr
 
 type MapTask struct {
-	MapID       int
-	FileName    string
-	MapFunction func(string, string) []KeyValue
+	MapID    int
+	FileName string
 }
 
 type ReduceTask struct {
-	ReduceID       int
-	Bucket         ReduceBucket
-	ReduceFunction func(string, []string) string
+	ReduceID int
+	Bucket   ReduceBucket
 }
 
 type MapTaskAllocated struct {
