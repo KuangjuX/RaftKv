@@ -7,20 +7,24 @@ package main
 // go build -buildmode=plugin mtiming.go
 //
 
-import "6.824/mr"
-import "strings"
-import "fmt"
-import "os"
-import "syscall"
-import "time"
-import "sort"
-import "io/ioutil"
+import (
+	"fmt"
+	"io/ioutil"
+	"os"
+	"sort"
+	"strings"
+	"syscall"
+	"time"
+
+	"6.824/mr"
+)
 
 func nparallel(phase string) int {
 	// create a file so that other workers will see that
 	// we're running at the same time as them.
 	pid := os.Getpid()
 	myfilename := fmt.Sprintf("mr-worker-%s-%d", phase, pid)
+	fmt.Printf("filename: %v\n", myfilename)
 	err := ioutil.WriteFile(myfilename, []byte("x"), 0666)
 	if err != nil {
 		panic(err)
@@ -53,6 +57,7 @@ func nparallel(phase string) int {
 
 	time.Sleep(1 * time.Second)
 
+	fmt.Printf("[Debug] Remove file: %v\n", myfilename)
 	err = os.Remove(myfilename)
 	if err != nil {
 		panic(err)

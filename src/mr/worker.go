@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"time"
 )
 
 type ByKey []KeyValue
@@ -134,7 +135,7 @@ func (manager *WorkerManager) scheduler() error {
 	wg := sync.WaitGroup{}
 	for i := 0; i < manager.MapNums; i++ {
 		wg.Add(1)
-		manager.MapChan = append(manager.MapChan, make(chan string))
+		manager.MapChan = append(manager.MapChan, make(chan string, 10))
 		go manager.HandleMap(
 			i,
 			manager.MapF,
@@ -228,6 +229,36 @@ func (manager *WorkerManager) scheduler() error {
 	return nil
 }
 
+func RunMapJob(task MapTask) {
+	intermediate := make([]KeyValue, 0)
+	filename := task.FileName
+	file, err := os.Open(filename)
+	if err != nil {
+		log.Fatalf("cannot open %v", filename)
+	}
+	content, err := io.ReadAll(file)
+	if err != nil {
+		log.Fatalf("cannot read %v", filename)
+	}
+
+	kva := task.MapFunction(filename, string(content))
+	intermediate = append(intermediate, kva...)
+
+	data, err := json.Marshal(intermediate)
+	if err != nil {
+		log.Fatalf("Fail to convert intermediate into string")
+	}
+	writeFileName := "map-" + strconv.FormatInt(int64(task.MapID), 10)
+	err = ioutil.WriteFile(writeFileName, data, 0644)
+	if err != nil {
+		log.Fatalf("cannot write file %v", writeFileName)
+	}
+}
+
+func RunReduceJob(task ReduceTask) {
+
+}
+
 //
 // main/mrworker.go calls this function.
 //
@@ -250,10 +281,29 @@ func Worker(mapf func(string, string) []KeyValue,
 	manager.InputFiles = response.Files
 
 	// Start manager schedule algorithm
-	err := manager.scheduler()
+	// err := manager.scheduler()
 
-	if err != nil {
-		log.Fatalf("fail to scheduler.\n")
+	// if err != nil {
+	// 	log.Fatalf("fail to scheduler.\n")
+	// }
+
+	for {
+		req := TaskRequest{}
+		rsp := TaskResponse{}
+		call("Coordinator.RequestTask", &req, &rsp)
+		switch rsp.TaskStatus {
+
+		case Wait:
+			time.Sleep(time.Duration(1) * time.Second)
+		case RunMapTask:
+			// Run Map Task
+			RunMapJob(rsp.MapTask)
+		case RunReduceTask:
+			// Run Reduce Task
+			RunReduceJob(rsp.ReduceTask)
+		case Exit:
+			// Call Master to finishe
+		}
 	}
 
 }

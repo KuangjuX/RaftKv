@@ -1,5 +1,5 @@
-UserProg = wc.go
-ExecFile = wc.so
+UserProg = mtiming.go
+ExecFile = mtiming.so
 
 .PHONY: build master worker clean
 
@@ -15,4 +15,4 @@ worker: build
 clean:
 	@rm $(ExecFile)
 	@rm map-*
-	@rm mr-out*
+	@rm -rf mr-*

@@ -32,6 +32,13 @@ type Coordinator struct {
 	ReduceState []int
 	// Input filenames
 	Files []string
+
+	// ReduceBuckets
+	Buckets []ReduceBucket
+}
+
+type ReduceBucket struct {
+	Data []ReduceData
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -68,6 +75,10 @@ func (c *Coordinator) HandleWorkerState(req *WorkerStateReq, rsp *WorkerStateRsp
 		// fmt.Printf("[Debug] Reduce machine %v %v.\n", req.Index, req.State)
 	}
 
+	return nil
+}
+
+func (c *Coordinator) RequestTask(req *TaskRequest, rsp *TaskResponse) error {
 	return nil
 }
 
