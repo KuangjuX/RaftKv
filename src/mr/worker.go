@@ -9,9 +9,7 @@ import (
 	"log"
 	"net/rpc"
 	"os"
-	"sort"
 	"strconv"
-	"sync"
 	"time"
 )
 
@@ -35,13 +33,9 @@ type ReduceData struct {
 }
 
 type WorkerManager struct {
-	MapChan    []chan string
-	ReduceChan []chan ReduceData
-	MapNums    int
-	ReduceNums int
-	InputFiles []string
-	MapF       func(string, string) []KeyValue
-	ReduceF    func(string, []string) string
+	WID     int
+	MapF    func(string, string) []KeyValue
+	ReduceF func(string, []string) string
 }
 
 //
@@ -55,179 +49,179 @@ func ihash(key string) int {
 }
 
 // Map handler
-func (manager *WorkerManager) HandleMap(
-	index int,
-	mapf func(string, string) []KeyValue,
-	InputChan chan string,
-	wg *sync.WaitGroup) {
-	defer wg.Done()
-	req := WorkerStateReq{
-		Index:       index,
-		MachineType: Map,
-		State:       Progress,
-	}
-	rsp := WorkerStateRsp{}
-	MachineCommunicate(&req, &rsp)
-	intermediate := make([]KeyValue, 0)
-	for filename := range InputChan {
-		file, err := os.Open(filename)
-		if err != nil {
-			log.Fatalf("cannot open %v", filename)
-		}
-		content, err := io.ReadAll(file)
-		if err != nil {
-			log.Fatalf("cannot read %v", filename)
-		}
+// func (manager *WorkerManager) HandleMap(
+// 	index int,
+// 	mapf func(string, string) []KeyValue,
+// 	InputChan chan string,
+// 	wg *sync.WaitGroup) {
+// 	defer wg.Done()
+// 	req := WorkerStateReq{
+// 		Index:       index,
+// 		MachineType: Map,
+// 		State:       Progress,
+// 	}
+// 	rsp := WorkerStateRsp{}
+// 	MachineCommunicate(&req, &rsp)
+// 	intermediate := make([]KeyValue, 0)
+// 	for filename := range InputChan {
+// 		file, err := os.Open(filename)
+// 		if err != nil {
+// 			log.Fatalf("cannot open %v", filename)
+// 		}
+// 		content, err := io.ReadAll(file)
+// 		if err != nil {
+// 			log.Fatalf("cannot read %v", filename)
+// 		}
 
-		kva := mapf(filename, string(content))
-		intermediate = append(intermediate, kva...)
-	}
+// 		kva := mapf(filename, string(content))
+// 		intermediate = append(intermediate, kva...)
+// 	}
 
-	data, err := json.Marshal(intermediate)
-	if err != nil {
-		log.Fatalf("Fail to convert intermediate into string")
-	}
-	writeFileName := "map-" + strconv.FormatInt(int64(index), 10)
-	err = ioutil.WriteFile(writeFileName, data, 0644)
-	if err != nil {
-		log.Fatalf("cannot write file %v", writeFileName)
-	}
+// 	data, err := json.Marshal(intermediate)
+// 	if err != nil {
+// 		log.Fatalf("Fail to convert intermediate into string")
+// 	}
+// 	writeFileName := "map-" + strconv.FormatInt(int64(index), 10)
+// 	err = ioutil.WriteFile(writeFileName, data, 0644)
+// 	if err != nil {
+// 		log.Fatalf("cannot write file %v", writeFileName)
+// 	}
 
-	// Send RPC to master to tell current task is done
-	req.State = Completed
-	MachineCommunicate(&req, &rsp)
-	// fmt.Printf("[Debug] Map worker %v finished\n", index)
-}
+// 	// Send RPC to master to tell current task is done
+// 	req.State = Completed
+// 	MachineCommunicate(&req, &rsp)
+// 	// fmt.Printf("[Debug] Map worker %v finished\n", index)
+// }
 
-func (manager *WorkerManager) HandleReduce(
-	index int,
-	reducef func(string, []string) string,
-	ReduceChan chan ReduceData,
-	wg *sync.WaitGroup) {
-	defer wg.Done()
+// func (manager *WorkerManager) HandleReduce(
+// 	index int,
+// 	reducef func(string, []string) string,
+// 	ReduceChan chan ReduceData,
+// 	wg *sync.WaitGroup) {
+// 	defer wg.Done()
 
-	req := WorkerStateReq{
-		Index:       index,
-		MachineType: Reduce,
-		State:       Progress,
-	}
-	rsp := WorkerStateRsp{}
-	MachineCommunicate(&req, &rsp)
+// 	req := WorkerStateReq{
+// 		Index:       index,
+// 		MachineType: Reduce,
+// 		State:       Progress,
+// 	}
+// 	rsp := WorkerStateRsp{}
+// 	MachineCommunicate(&req, &rsp)
 
-	OutFileName := "mr-out-" + strconv.FormatInt(int64(index+1), 10)
-	OutFile, _ := os.Create(OutFileName)
-	for each := range ReduceChan {
-		output := reducef(each.Key, each.Values)
-		_, _ = fmt.Fprintf(OutFile, "%v %v\n", each.Key, output)
-		// fmt.Printf("[Debug] Run key %s\n", each.Key)
-	}
+// 	OutFileName := "mr-out-" + strconv.FormatInt(int64(index+1), 10)
+// 	OutFile, _ := os.Create(OutFileName)
+// 	for each := range ReduceChan {
+// 		output := reducef(each.Key, each.Values)
+// 		_, _ = fmt.Fprintf(OutFile, "%v %v\n", each.Key, output)
+// 		// fmt.Printf("[Debug] Run key %s\n", each.Key)
+// 	}
 
-	req.State = Completed
-	MachineCommunicate(&req, &rsp)
-	// fmt.Printf("[Debug] Reduce worker %v finished\n", index)
+// 	req.State = Completed
+// 	MachineCommunicate(&req, &rsp)
+// 	// fmt.Printf("[Debug] Reduce worker %v finished\n", index)
 
-}
+// }
 
 // WorkerManager schedule how to execute map and reduce functions
-func (manager *WorkerManager) scheduler() error {
-	manager.MapChan = make([]chan string, 0)
-	manager.ReduceChan = make([]chan ReduceData, 0)
-	wg := sync.WaitGroup{}
-	for i := 0; i < manager.MapNums; i++ {
-		wg.Add(1)
-		manager.MapChan = append(manager.MapChan, make(chan string, 10))
-		go manager.HandleMap(
-			i,
-			manager.MapF,
-			manager.MapChan[i],
-			&wg)
-	}
+// func (manager *WorkerManager) scheduler() error {
+// 	manager.MapChan = make([]chan string, 0)
+// 	manager.ReduceChan = make([]chan ReduceData, 0)
+// 	wg := sync.WaitGroup{}
+// 	for i := 0; i < manager.MapNums; i++ {
+// 		wg.Add(1)
+// 		manager.MapChan = append(manager.MapChan, make(chan string, 10))
+// 		go manager.HandleMap(
+// 			i,
+// 			manager.MapF,
+// 			manager.MapChan[i],
+// 			&wg)
+// 	}
 
-	// Select filename to send special map goroutine
-	for _, filename := range manager.InputFiles {
-		index := ihash(filename) % manager.MapNums
-		manager.MapChan[index] <- filename
-	}
-	// Close input channel since no more jobs are being sent to input channel
-	for i := 0; i < manager.MapNums; i++ {
-		close(manager.MapChan[i])
-	}
+// 	// Select filename to send special map goroutine
+// 	for _, filename := range manager.InputFiles {
+// 		index := ihash(filename) % manager.MapNums
+// 		manager.MapChan[index] <- filename
+// 	}
+// 	// Close input channel since no more jobs are being sent to input channel
+// 	for i := 0; i < manager.MapNums; i++ {
+// 		close(manager.MapChan[i])
+// 	}
 
-	// fmt.Print("[Debug] Wait Map machines to end.\n")
-	// Wait for all map goroutine to execute.
-	wg.Wait()
-	// print("[Debug] Map Worker finish to execute.\n")
-	// Send to Master to ask for if start reduce
+// 	// fmt.Print("[Debug] Wait Map machines to end.\n")
+// 	// Wait for all map goroutine to execute.
+// 	wg.Wait()
+// 	// print("[Debug] Map Worker finish to execute.\n")
+// 	// Send to Master to ask for if start reduce
 
-	// Read all data from intermediate
-	var mapData []KeyValue
-	for i := 0; i < manager.MapNums; i++ {
-		filename := "map-" + strconv.FormatInt(int64(i), 10)
-		file, err := os.Open(filename)
-		if err != nil {
-			log.Fatalf("fail to open file %v", filename)
-		}
+// 	// Read all data from intermediate
+// 	var mapData []KeyValue
+// 	for i := 0; i < manager.MapNums; i++ {
+// 		filename := "map-" + strconv.FormatInt(int64(i), 10)
+// 		file, err := os.Open(filename)
+// 		if err != nil {
+// 			log.Fatalf("fail to open file %v", filename)
+// 		}
 
-		content, err := io.ReadAll(file)
-		if err != nil {
-			log.Fatalf("fail to read file %v", filename)
-		}
-		var data []KeyValue
-		err = json.Unmarshal(content, &data)
-		if err != nil {
-			log.Fatalf("fail to parse json file %v", filename)
-		}
-		mapData = append(mapData, data...)
-	}
+// 		content, err := io.ReadAll(file)
+// 		if err != nil {
+// 			log.Fatalf("fail to read file %v", filename)
+// 		}
+// 		var data []KeyValue
+// 		err = json.Unmarshal(content, &data)
+// 		if err != nil {
+// 			log.Fatalf("fail to parse json file %v", filename)
+// 		}
+// 		mapData = append(mapData, data...)
+// 	}
 
-	sort.Sort(ByKey(mapData))
-	// keys := FindKeys(mapData)
-	wg = sync.WaitGroup{}
+// 	sort.Sort(ByKey(mapData))
+// 	// keys := FindKeys(mapData)
+// 	wg = sync.WaitGroup{}
 
-	// Start reduce
-	for i := 0; i < manager.ReduceNums; i++ {
-		wg.Add(1)
-		manager.ReduceChan = append(manager.ReduceChan, make(chan ReduceData, 1000))
-		go manager.HandleReduce(
-			i,
-			manager.ReduceF,
-			manager.ReduceChan[i],
-			&wg)
-	}
+// 	// Start reduce
+// 	for i := 0; i < manager.ReduceNums; i++ {
+// 		wg.Add(1)
+// 		manager.ReduceChan = append(manager.ReduceChan, make(chan ReduceData, 1000))
+// 		go manager.HandleReduce(
+// 			i,
+// 			manager.ReduceF,
+// 			manager.ReduceChan[i],
+// 			&wg)
+// 	}
 
-	// for _, key := range keys {
-	// 	hash := ihash(key) % manager.ReduceNums
-	// 	manager.ReduceChan[hash] <- key
-	// }
+// 	// for _, key := range keys {
+// 	// 	hash := ihash(key) % manager.ReduceNums
+// 	// 	manager.ReduceChan[hash] <- key
+// 	// }
 
-	i := 0
-	for i < len(mapData) {
-		j := i + 1
-		for j < len(mapData) && mapData[j].Key == mapData[i].Key {
-			j++
-		}
-		values := make([]string, 0)
-		for k := i; k < j; k++ {
-			values = append(values, mapData[k].Value)
-		}
-		data := ReduceData{
-			Key:    mapData[i].Key,
-			Values: values,
-		}
-		hash := ihash(mapData[i].Key) % manager.ReduceNums
-		manager.ReduceChan[hash] <- data
-		i = j
-	}
+// 	i := 0
+// 	for i < len(mapData) {
+// 		j := i + 1
+// 		for j < len(mapData) && mapData[j].Key == mapData[i].Key {
+// 			j++
+// 		}
+// 		values := make([]string, 0)
+// 		for k := i; k < j; k++ {
+// 			values = append(values, mapData[k].Value)
+// 		}
+// 		data := ReduceData{
+// 			Key:    mapData[i].Key,
+// 			Values: values,
+// 		}
+// 		hash := ihash(mapData[i].Key) % manager.ReduceNums
+// 		manager.ReduceChan[hash] <- data
+// 		i = j
+// 	}
 
-	for i := 0; i < manager.ReduceNums; i++ {
-		close(manager.ReduceChan[i])
-	}
+// 	for i := 0; i < manager.ReduceNums; i++ {
+// 		close(manager.ReduceChan[i])
+// 	}
 
-	// fmt.Print("[Debug] Wait Reduce machines to end.\n")
-	wg.Wait()
-	// print("[Debug] Reduce Worker finish to execute.\n")
-	return nil
-}
+// 	// fmt.Print("[Debug] Wait Reduce machines to end.\n")
+// 	wg.Wait()
+// 	// print("[Debug] Reduce Worker finish to execute.\n")
+// 	return nil
+// }
 
 func RunMapJob(task MapTask, handler func(string, string) []KeyValue) {
 	intermediate := make([]KeyValue, 0)
@@ -277,17 +271,11 @@ func Worker(mapf func(string, string) []KeyValue,
 	// Your worker implementation here.
 
 	// uncomment to send the Example RPC to the coordinator.
-	request := WorkerRequest{}
-	response := WorkerResponse{}
-	RequestMaster(&request, &response)
 
 	// Initialize worker manager
 	var manager WorkerManager
 	manager.MapF = mapf
 	manager.ReduceF = reducef
-	manager.ReduceNums = response.ReduceNums
-	manager.MapNums = response.MapNums
-	manager.InputFiles = response.Files
 
 	// Start manager schedule algorithm
 	// err := manager.scheduler()

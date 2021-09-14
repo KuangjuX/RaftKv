@@ -82,6 +82,15 @@ type Coordinator struct {
 	// 对于每个 Worker 维护的计时器channel
 	TimerChans []chan int
 }
+```  
+   
+Worker 所维护的状态:
+```golang
+type WorkerManager struct {
+	WID     int
+	MapF    func(string, string) []KeyValue
+	ReduceF func(string, []string) string
+}
 ```
 
 **通过的测试用例**：
