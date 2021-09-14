@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
-	"sync"
 )
 
 const (
@@ -22,19 +21,21 @@ const (
 
 type Coordinator struct {
 	// Your definitions here.
-	MapLock    sync.Mutex
-	ReduceLock sync.Mutex
-
 	nMap    int
 	nReduce int
-	// Every worker state
+	// 用来维护每个任务的状态，用来派发任务
 	MapState    []int
 	ReduceState []int
-	// Input filenames
+	// 输入的文件名
 	Files []string
-
-	// ReduceBuckets
+	// reduce buckets，用来派发 reduce tasks
 	Buckets []ReduceBucket
+
+	// 每个 Worker 的状态维护列表
+	WStates []WorkersState
+
+	// 对于每个 Worker 维护的计时器channel
+	TimerChans []chan int
 }
 
 type ReduceBucket struct {
@@ -43,40 +44,30 @@ type ReduceBucket struct {
 
 // Your code here -- RPC handlers for the worker to call.
 
-//
-// an example RPC handler.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
-func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
-	return nil
-}
+// func (c *Coordinator) HandleWorkerRequest(args *WorkerRequest, reply *WorkerResponse) error {
+// 	reply.MapNums = c.nMap
+// 	reply.ReduceNums = c.nReduce
+// 	reply.Files = c.Files
+// 	return nil
+// }
 
-func (c *Coordinator) HandleWorkerRequest(args *WorkerRequest, reply *WorkerResponse) error {
-	reply.MapNums = c.nMap
-	reply.ReduceNums = c.nReduce
-	reply.Files = c.Files
-	return nil
-}
+// func (c *Coordinator) HandleWorkerState(req *WorkerStateReq, rsp *WorkerStateRsp) error {
+// 	WorkerType := req.MachineType
 
-func (c *Coordinator) HandleWorkerState(req *WorkerStateReq, rsp *WorkerStateRsp) error {
-	WorkerType := req.MachineType
+// 	if WorkerType == Map {
+// 		c.MapLock.Lock()
+// 		c.MapState[req.Index] = req.State
+// 		c.MapLock.Unlock()
+// 		// fmt.Printf("[Debug] Map machine %v %v.\n", req.Index, req.State)
+// 	} else if WorkerType == Reduce {
+// 		c.ReduceLock.Lock()
+// 		c.ReduceState[req.Index] = req.State
+// 		c.ReduceLock.Unlock()
+// 		// fmt.Printf("[Debug] Reduce machine %v %v.\n", req.Index, req.State)
+// 	}
 
-	if WorkerType == Map {
-		c.MapLock.Lock()
-		c.MapState[req.Index] = req.State
-		c.MapLock.Unlock()
-		// fmt.Printf("[Debug] Map machine %v %v.\n", req.Index, req.State)
-	} else if WorkerType == Reduce {
-		c.ReduceLock.Lock()
-		c.ReduceState[req.Index] = req.State
-		c.ReduceLock.Unlock()
-		// fmt.Printf("[Debug] Reduce machine %v %v.\n", req.Index, req.State)
-	}
-
-	return nil
-}
+// 	return nil
+// }
 
 func (c *Coordinator) RequestTask(req *TaskRequest, rsp *TaskResponse) error {
 	mapEnd := true
@@ -138,16 +129,16 @@ func (c *Coordinator) Done() bool {
 	ret := false
 
 	// Your code here.
-	c.ReduceLock.Lock()
-	defer c.ReduceLock.Unlock()
-	for i := 0; i < c.nReduce; i++ {
-		if c.ReduceState[i] == Completed {
-			ret = true
-		} else {
-			ret = false
-			break
-		}
-	}
+	// c.ReduceLock.Lock()
+	// defer c.ReduceLock.Unlock()
+	// for i := 0; i < c.nReduce; i++ {
+	// 	if c.ReduceState[i] == Completed {
+	// 		ret = true
+	// 	} else {
+	// 		ret = false
+	// 		break
+	// 	}
+	// }
 
 	return ret
 }
