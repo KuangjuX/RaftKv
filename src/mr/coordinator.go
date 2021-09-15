@@ -2,6 +2,7 @@ package mr
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -46,6 +47,10 @@ type Coordinator struct {
 	// Reduce数据是否已经准备好
 	ReadyLock     sync.Mutex
 	IsReduceReady bool
+
+	// 所有任务是否已经完成
+	TaskLock sync.Mutex
+	TaskEnd  bool
 }
 
 type ReduceBucket struct {
@@ -80,8 +85,9 @@ type ReduceBucket struct {
 // }
 
 // 获取Map数据并将其分成Reduce Bucket
-func (c *Coordinator) PushReduceBucket() {
+func PushReduceBucket(c *Coordinator) {
 	// 读入生成的所有map文件并且将其放入mapData中
+	print("[Debug] 读入所有数据.\n")
 	var mapData []KeyValue
 	for i := 0; i < c.nMap; i++ {
 		filename := "map-" + strconv.FormatInt(int64(i), 10)
@@ -106,6 +112,7 @@ func (c *Coordinator) PushReduceBucket() {
 	sort.Sort(ByKey(mapData))
 
 	// 此时将读出的数据分成bucket
+	fmt.Printf("[Debug] 此时开始处理Reduce数据.\n")
 	i := 0
 	for i < len(mapData) {
 		j := i + 1
@@ -127,8 +134,10 @@ func (c *Coordinator) PushReduceBucket() {
 	}
 }
 
-func (c *Coordinator) CheckReduceReady() {
+// 开启协程，判断是否Reduce Bucket已经准备好了
+func CheckReduceReady(c *Coordinator) {
 	for {
+		// 首先判断是否Map数据已经准备好了
 		isMapReady := true
 		for i := 0; i < c.nMap; i++ {
 			if c.MapState[i] != Completed {
@@ -136,34 +145,78 @@ func (c *Coordinator) CheckReduceReady() {
 			}
 		}
 
+		// 如果Map数据已经准备好了，则去读入所有map数据并将其放入
+		// reduce bucket中
 		if isMapReady {
 			// 这里处理读入Map的数据并将其放入到Reduce Bucket中
-			c.PushReduceBucket()
+			PushReduceBucket(c)
 			c.ReadyLock.Lock()
 			isMapReady = true
 			c.ReadyLock.Unlock()
+			return
+		}
+		// 倘若没准备好，则休眠等待下次轮询
+		time.Sleep(time.Duration(1) * time.Second)
+	}
+}
+
+// 开启协程，用来判断是否所有任务已经完成
+func CheckReduceFin(c *Coordinator) {
+	for {
+		IsReduceFin := true
+		for i := 0; i < len(c.ReduceState); i++ {
+			if c.ReduceState[i] != Completed {
+				IsReduceFin = false
+			}
+		}
+		if IsReduceFin {
+			c.TaskLock.Lock()
+			c.TaskEnd = false
+			c.TaskLock.Unlock()
 			return
 		}
 		time.Sleep(time.Duration(1) * time.Second)
 	}
 }
 
+// 更新任务的状态
+func (c *Coordinator) UpdateTaskState(WID int) {
+	if WID != -1 {
+		if c.WStates[WID].WStatus == RunMapTask {
+			c.MapState[c.WStates[WID].MTask.MapID] = Completed
+		} else if c.WStates[WID].WStatus == RunReduceTask {
+			c.ReduceState[c.WStates[WID].RTask.ReduceID] = Completed
+		}
+	}
+}
+
 func (c *Coordinator) RequestTask(req *TaskRequest, rsp *TaskResponse) error {
 	// 如果此时Worker是第一次请求的话，为其分配id
 	// 并在WStates加入对应的结构
+	c.UpdateTaskState(req.WID)
 	if req.WID == -1 {
 		rsp.WID = len(c.WStates)
 		c.WStates = append(c.WStates, WorkersState{})
 	}
-	WID := req.WID
 
+	// 将WID作为局部变量赋值，方便之后的处理
+	var WID int
+	if req.WID == -1 {
+		WID = rsp.WID
+	} else {
+		WID = req.WID
+	}
+
+	// 循环Master的Map任务状态，判断是否所有任务都完成了
+	// 否则为Worker分发任务
 	for i := 0; i < len(c.MapState); i++ {
 		if c.MapState[i] == Idle {
-			rsp.TaskStatus = Map
+			rsp.TaskStatus = RunMapTask
 			rsp.MapTask = MapTask{
 				MapID:    i,
 				FileName: c.Files[i],
 			}
+			// 更新对于Map任务状态
 			c.MapState[i] = Progress
 			// 更新Master的对该Worker的状态维护
 			c.WStates[WID] = WorkersState{
@@ -176,6 +229,7 @@ func (c *Coordinator) RequestTask(req *TaskRequest, rsp *TaskResponse) error {
 		}
 	}
 
+	// 如果没有准备好Reduce Bucket，则进入等待状态
 	if !c.IsReduceReady {
 		rsp.WID = WID
 		rsp.TaskStatus = Wait
@@ -187,12 +241,10 @@ func (c *Coordinator) RequestTask(req *TaskRequest, rsp *TaskResponse) error {
 		return nil
 	}
 
-	IsReduceEnd := true
-
 	for i := 0; i < len(c.MapState); i++ {
 		if c.ReduceState[i] == Idle {
 			rsp.WID = WID
-			rsp.TaskStatus = Reduce
+			rsp.TaskStatus = RunReduceTask
 			rsp.ReduceTask = ReduceTask{
 				ReduceID: i,
 				Bucket:   c.Buckets[i],
@@ -207,18 +259,25 @@ func (c *Coordinator) RequestTask(req *TaskRequest, rsp *TaskResponse) error {
 				},
 			}
 			return nil
-		} else if c.ReduceState[i] == Progress {
-			IsReduceEnd = false
 		}
 	}
 
-	if !IsReduceEnd {
+	if !c.TaskEnd {
 		rsp.WID = WID
 		rsp.TaskStatus = Wait
+		// 更新Master状态
+		c.WStates[WID] = WorkersState{
+			WID:     WID,
+			WStatus: Wait,
+		}
 		return nil
 	}
 
 	rsp.TaskStatus = Exit
+	c.WStates[WID] = WorkersState{
+		WID:     WID,
+		WStatus: Exit,
+	}
 
 	return nil
 }
@@ -247,7 +306,7 @@ func (c *Coordinator) server() {
 func (c *Coordinator) Done() bool {
 	ret := true
 	if len(c.WStates) == 0 {
-		return ret
+		return false
 	}
 
 	// Your code here.
@@ -276,6 +335,9 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	// 初始化Map和Reduce任务的状态
 	c.MapState = make([]int, c.nMap)
 	c.ReduceState = make([]int, c.nReduce)
+	// 初始化任务完成情况，判断当Worker轮询时是否返回Wait状态
+	c.IsReduceReady = false
+	c.TaskEnd = false
 	for i := 0; i < c.nMap; i++ {
 		c.MapState[i] = Idle
 	}
@@ -285,7 +347,9 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	}
 
 	// 开启协程，检查是否Reduce任务准备好
-	go c.CheckReduceReady()
+	go CheckReduceReady(&c)
+	// 开启协程，轮询检查是否所有任务已经完成
+	go CheckReduceFin(&c)
 	c.server()
 	return &c
 }

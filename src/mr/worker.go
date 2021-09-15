@@ -274,6 +274,7 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	// Initialize worker manager
 	var manager WorkerManager
+	manager.WID = -1
 	manager.MapF = mapf
 	manager.ReduceF = reducef
 
@@ -285,7 +286,9 @@ func Worker(mapf func(string, string) []KeyValue,
 	// }
 Event:
 	for {
-		req := TaskRequest{}
+		req := TaskRequest{
+			WID: manager.WID,
+		}
 		rsp := TaskResponse{}
 		call("Coordinator.RequestTask", &req, &rsp)
 		switch rsp.TaskStatus {
@@ -299,7 +302,7 @@ Event:
 			// Run Reduce Task
 			RunReduceJob(rsp.ReduceTask, reducef)
 		case Exit:
-			// Call Master to finishe
+			// Call Master to finish
 			RunExitJob()
 			break Event
 		}

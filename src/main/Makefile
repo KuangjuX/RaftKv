@@ -1,5 +1,5 @@
-UserProg = mtiming.go
-ExecFile = mtiming.so
+UserProg = wc.go
+ExecFile = wc.so
 
 .PHONY: build master worker clean
 
@@ -10,7 +10,9 @@ master:
 	@go run -race mrcoordinator.go pg-*.txt
 
 worker: build
-	@go run -race mrworker.go $(ExecFile)
+	@go run -race mrworker.go $(ExecFile) & \
+	go run -race mrworker.go $(ExecFile) & \
+	go run -race mrworker.go $(ExecFile)
 
 clean:
 	@rm $(ExecFile)
