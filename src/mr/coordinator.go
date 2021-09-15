@@ -160,7 +160,7 @@ func CheckReduceReady(c *Coordinator) {
 			// 这里处理读入Map的数据并将其放入到Reduce Bucket中
 			PushReduceBucket(c)
 			c.ReadyLock.Lock()
-			isMapReady = true
+			c.IsReduceReady = true
 			c.ReadyLock.Unlock()
 			fmt.Println("[Reduce Task] Map 任务已经准备好，将为 Worker 派发任务.")
 			return
@@ -273,7 +273,11 @@ func (c *Coordinator) RequestTask(req *TaskRequest, rsp *TaskResponse) error {
 
 	for i := 0; i < len(c.MapState); i++ {
 		if c.ReduceState[i] == Idle {
-			fmt.Printf("[Map Task] 此时 Worker %v 运行 %v号任务.\n", WID, i)
+			c.ReduceStateLock.Lock()
+			c.ReduceState[i] = Progress
+			c.ReadyLock.Unlock()
+			fmt.Printf("[Reduce Task] 此时 Worker %v 运行 %v 号任务.\n", WID, i)
+
 			rsp.WID = WID
 			rsp.TaskStatus = RunReduceTask
 			rsp.ReduceTask = ReduceTask{
