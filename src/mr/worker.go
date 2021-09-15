@@ -272,7 +272,7 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	// uncomment to send the Example RPC to the coordinator.
 
-	// Initialize worker manager
+	// 初始化管理者
 	var manager WorkerManager
 	manager.WID = -1
 	manager.MapF = mapf
@@ -284,27 +284,38 @@ func Worker(mapf func(string, string) []KeyValue,
 	// if err != nil {
 	// 	log.Fatalf("fail to scheduler.\n")
 	// }
-Event:
+
 	for {
 		req := TaskRequest{
 			WID: manager.WID,
 		}
 		rsp := TaskResponse{}
+		// fmt.Printf("[Debug] Worker %v send request.\n", req.WID)
 		call("Coordinator.RequestTask", &req, &rsp)
+
+		// 更新管理者ID
+		// manager.WID = rsp.WID
+		if manager.WID == -1 {
+			manager.WID = rsp.WID
+		}
 		switch rsp.TaskStatus {
 
 		case Wait:
-			time.Sleep(time.Duration(1) * time.Second)
+			fmt.Printf("[Wait] Worker %v wait.\n", manager.WID)
+			time.Sleep(1 * time.Second)
 		case RunMapTask:
 			// Run Map Task
-			RunMapJob(rsp.MapTask, mapf)
+			fmt.Printf("[Map Task] Worker %v run map task %v.\n", manager.WID, rsp.MapTask.MapID)
+			RunMapJob(rsp.MapTask, manager.MapF)
 		case RunReduceTask:
 			// Run Reduce Task
-			RunReduceJob(rsp.ReduceTask, reducef)
+			fmt.Printf("[Map Task] Worker %v run reduce task %v.\n", manager.WID, rsp.ReduceTask.ReduceID)
+			RunReduceJob(rsp.ReduceTask, manager.ReduceF)
 		case Exit:
 			// Call Master to finish
+			fmt.Printf("[Exit] Worker %v exit.\n", manager.WID)
 			RunExitJob()
-			break Event
+			return
 		}
 	}
 
