@@ -69,18 +69,29 @@ type Coordinator struct {
 	nMap    int
 	nReduce int
 	// 用来维护每个任务的状态，用来派发任务
-	MapState    []int
-	ReduceState []int
+	MapStateLock sync.RWMutex
+	MapState     []int
+
+	ReduceStateLock sync.RWMutex
+	ReduceState     []int
 	// 输入的文件名
 	Files []string
+
 	// reduce buckets，用来派发 reduce tasks
 	Buckets []ReduceBucket
 
 	// 每个 Worker 的状态维护列表
-	WStates []WorkersState
+	WStates    []WorkersState
+	WorkerLock sync.RWMutex
 
 	// 对于每个 Worker 维护的计时器channel
 	TimerChans []chan int
+
+	// Reduce数据是否已经准备好
+	IsReduceReady atomic.Value
+
+	// 所有任务是否已经完成
+	TaskEnd atomic.Value
 }
 ```  
    
@@ -91,7 +102,179 @@ type WorkerManager struct {
 	MapF    func(string, string) []KeyValue
 	ReduceF func(string, []string) string
 }
-```
+```  
+   
+关于 Worker 中的行为较为简单，只需在每次任务完成后向 Master 发送 RPC 请求即可：
+```golang
+func Worker(mapf func(string, string) []KeyValue,
+	reducef func(string, []string) string) {
+	// 初始化管理者
+	var manager WorkerManager
+	manager.WID = -1
+	manager.MapF = mapf
+	manager.ReduceF = reducef
+
+	for {
+		req := TaskRequest{
+			WID: manager.WID,
+		}
+		rsp := TaskResponse{}
+		call("Coordinator.RequestTask", &req, &rsp)
+
+		// 更新管理者ID
+		if manager.WID == -1 {
+			manager.WID = rsp.WID
+		}
+		switch rsp.TaskStatus {
+
+		case Wait:
+			fmt.Printf("[Wait] Worker %v wait.\n", manager.WID)
+			time.Sleep(1 * time.Second)
+		case RunMapTask:
+			// Run Map Task
+			fmt.Printf("[Map Task] Worker %v run map task %v.\n", manager.WID, rsp.MapTask.MapID)
+			RunMapJob(rsp.MapTask, manager.MapF)
+		case RunReduceTask:
+			// Run Reduce Task
+			fmt.Printf("[Map Task] Worker %v run reduce task %v.\n", manager.WID, rsp.ReduceTask.ReduceID)
+			RunReduceJob(rsp.ReduceTask, manager.ReduceF)
+		case Exit:
+			// Call Master to finish
+			fmt.Printf("[Exit] Worker %v exit.\n", manager.WID)
+			RunExitJob()
+			return
+		}
+	}
+
+}
+```  
+   
+关于 Master 的核心处理逻辑则较为复杂，因为它需要调度 Worker 去运行不同的任务，并判断是否有 Worker 宕机了。
+ ```golang
+ func (c *Coordinator) RequestTask(req *TaskRequest, rsp *TaskResponse) error {
+	// 如果此时Worker是第一次请求的话，为其分配id
+	// 并在WStates加入对应的结构
+	c.UpdateTaskState(req.WID)
+	if req.WID == -1 {
+		// 为Worker分配索引号
+		rsp.WID = len(c.WStates)
+		c.WorkerLock.Lock()
+		c.WStates = append(c.WStates, WorkersState{})
+		c.WorkerLock.Unlock()
+		c.TimerChans = append(c.TimerChans, make(chan int, 1))
+		// fmt.Printf("分配的 Worker id 为 %v.\n", rsp.WID)
+	}
+
+	// 将WID作为局部变量赋值，方便之后的处理
+	var WID int
+	if req.WID == -1 {
+		WID = rsp.WID
+	} else {
+		WID = req.WID
+	}
+
+	// 循环Master的Map任务状态，判断是否所有任务都完成了
+	// 否则为Worker分发任务
+	// c.MapStateLock.Lock()
+	// c.MapStateLock.RLock()
+	for i := 0; i < len(c.MapState); i++ {
+		// c.MapStateLock.RLock()
+		if c.MapState[i] == Idle {
+			// c.MapStateLock.RUnlock()
+			c.MapStateLock.Lock()
+			c.MapState[i] = Progress
+			c.MapStateLock.Unlock()
+
+			fmt.Printf("[Map Task] 此时 Worker %v 运行 %v 号任务.\n", WID, i)
+
+			// 更新对于Map任务状态
+			rsp.TaskStatus = RunMapTask
+			rsp.MapTask = MapTask{
+				MapID:    i,
+				FileName: c.Files[i],
+			}
+
+			// 更新Master的对该Worker的状态维护
+			c.WorkerLock.Lock()
+			c.WStates[WID].WStatus = RunMapTask
+			c.WStates[WID].MTask = rsp.MapTask
+			c.WorkerLock.Unlock()
+			go c.StartTimer(WID, c.TimerChans[WID])
+			return nil
+		}
+		// c.MapStateLock.Unlock()
+	}
+	// c.MapStateLock.RUnlock()
+
+	// 如果没有准备好Reduce Bucket，则进入等待状态
+	// c.ReadyLock.RLock()
+	if c.IsReduceReady.Load() == false {
+		rsp.WID = WID
+		rsp.TaskStatus = Wait
+		// 更新Master对于Worker的状态
+		c.WorkerLock.Lock()
+		c.WStates[WID].WStatus = Wait
+		c.WorkerLock.Unlock()
+		return nil
+	}
+	// c.ReadyLock.RUnlock()
+
+	// c.ReduceStateLock.RLock()
+	for i := 0; i < len(c.ReduceState); i++ {
+		// c.ReduceStateLock.RLock()
+		if c.ReduceState[i] == Idle {
+			// c.ReduceStateLock.RUnlock()
+			c.ReduceStateLock.Lock()
+			c.ReduceState[i] = Progress
+			c.ReduceStateLock.Unlock()
+
+			fmt.Printf("[Reduce Task] 此时 Worker %v 运行 %v 号任务.\n", WID, i)
+
+			rsp.TaskStatus = RunReduceTask
+			rsp.ReduceTask = ReduceTask{
+				ReduceID: i,
+				Bucket:   c.Buckets[i],
+			}
+			// 更新Master对Worker的维护信息
+			c.WorkerLock.Lock()
+			c.WStates[WID] = WorkersState{
+				WID:     WID,
+				WStatus: RunReduceTask,
+				RTask: ReduceTask{
+					ReduceID: i,
+					Bucket:   c.Buckets[i],
+				},
+			}
+			c.WorkerLock.Unlock()
+			go c.StartTimer(WID, c.TimerChans[WID])
+			return nil
+		}
+	}
+	// c.ReduceStateLock.RUnlock()
+
+	// c.TaskLock.RLock()
+	if c.TaskEnd.Load() == false {
+		rsp.WID = WID
+		rsp.TaskStatus = Wait
+		// 更新Master状态
+		c.WorkerLock.Lock()
+		c.WStates[WID] = WorkersState{
+			WID:     WID,
+			WStatus: Wait,
+		}
+		c.WorkerLock.Unlock()
+		return nil
+	}
+	// c.TaskLock.RUnlock()
+
+	rsp.TaskStatus = Exit
+	c.WorkerLock.Lock()
+	c.WStates[WID].WStatus = Exit
+	c.WorkerLock.Unlock()
+
+	return nil
+}
+ ```
 
 **通过的测试用例**：
 - [x] wc

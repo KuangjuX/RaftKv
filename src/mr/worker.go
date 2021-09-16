@@ -267,34 +267,20 @@ func RunExitJob() {
 //
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-
-	// Your worker implementation here.
-
-	// uncomment to send the Example RPC to the coordinator.
-
 	// 初始化管理者
 	var manager WorkerManager
 	manager.WID = -1
 	manager.MapF = mapf
 	manager.ReduceF = reducef
 
-	// Start manager schedule algorithm
-	// err := manager.scheduler()
-
-	// if err != nil {
-	// 	log.Fatalf("fail to scheduler.\n")
-	// }
-
 	for {
 		req := TaskRequest{
 			WID: manager.WID,
 		}
 		rsp := TaskResponse{}
-		// fmt.Printf("[Debug] Worker %v send request.\n", req.WID)
 		call("Coordinator.RequestTask", &req, &rsp)
 
 		// 更新管理者ID
-		// manager.WID = rsp.WID
 		if manager.WID == -1 {
 			manager.WID = rsp.WID
 		}
