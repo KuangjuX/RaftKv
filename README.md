@@ -100,8 +100,8 @@ type WorkerManager struct {
 - [x] mtiming
 - [x] rtiming
 - [x] early_exit
-- [ ] nocrash
-- [ ] crash
+- [x] nocrash
+- [x] crash
 
 ## Lab-2 Raft
 

@@ -1,5 +1,5 @@
-UserProg = wc.go
-ExecFile = wc.so
+UserProg = crash.go
+ExecFile = crash.so
 
 .PHONY: build master worker clean
 

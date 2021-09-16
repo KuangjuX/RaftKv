@@ -27,6 +27,11 @@ const (
 	Reduce = 1
 )
 
+const (
+	Timeout  = 0
+	Finished = 1
+)
+
 type Coordinator struct {
 	// Your definitions here.
 	nMap    int
@@ -51,11 +56,9 @@ type Coordinator struct {
 	TimerChans []chan int
 
 	// Reduce数据是否已经准备好
-	// ReadyLock     sync.RWMutex
 	IsReduceReady atomic.Value
 
 	// 所有任务是否已经完成
-	// TaskLock sync.RWMutex
 	TaskEnd atomic.Value
 }
 
@@ -174,15 +177,50 @@ func (c *Coordinator) UpdateTaskState(WID int) {
 	if WID != -1 {
 		if c.WStates[WID].WStatus == RunMapTask {
 			fmt.Printf("[Map Task] Worker %v 完成了 %v 号任务.\n", WID, c.WStates[WID].MTask.MapID)
+			c.TimerChans[WID] <- Finished
 			c.MapStateLock.Lock()
 			c.MapState[c.WStates[WID].MTask.MapID] = Completed
 			c.MapStateLock.Unlock()
 		} else if c.WStates[WID].WStatus == RunReduceTask {
 			fmt.Printf("[Reduce Task] Worker %v 完成了 %v 号任务.\n", WID, c.WStates[WID].RTask.ReduceID)
+			c.TimerChans[WID] <- Finished
 			c.ReduceStateLock.Lock()
 			c.ReduceState[c.WStates[WID].RTask.ReduceID] = Completed
 			c.ReduceStateLock.Unlock()
 		}
+	}
+}
+
+// 计时器，用来判断 Worker 是否超时
+func (c *Coordinator) StartTimer(WID int, signal chan int) {
+	timer := time.NewTicker(time.Second * 10)
+	defer timer.Stop()
+
+	for {
+		select {
+		// 监测到中断信号量，此时任务已经完成，结束计时
+		case msg := <-signal:
+			if msg == Finished {
+				fmt.Printf("[计时器] 收到 Worker 完成任务标志.\n")
+				return
+			}
+		case <-timer.C:
+			fmt.Printf("[计时器] 超时, 重新分发任务.\n")
+			if c.WStates[WID].WStatus == RunMapTask {
+				task := c.WStates[WID].MTask
+				c.MapStateLock.Lock()
+				c.MapState[task.MapID] = Idle
+				c.MapStateLock.Unlock()
+				return
+			} else if c.WStates[WID].WStatus == RunReduceTask {
+				task := c.WStates[WID].RTask
+				c.ReduceStateLock.Lock()
+				c.ReduceState[task.ReduceID] = Idle
+				c.ReduceStateLock.Unlock()
+				return
+			}
+		}
+
 	}
 }
 
@@ -196,6 +234,7 @@ func (c *Coordinator) RequestTask(req *TaskRequest, rsp *TaskResponse) error {
 		c.WorkerLock.Lock()
 		c.WStates = append(c.WStates, WorkersState{})
 		c.WorkerLock.Unlock()
+		c.TimerChans = append(c.TimerChans, make(chan int, 1))
 		// fmt.Printf("分配的 Worker id 为 %v.\n", rsp.WID)
 	}
 
@@ -230,14 +269,10 @@ func (c *Coordinator) RequestTask(req *TaskRequest, rsp *TaskResponse) error {
 
 			// 更新Master的对该Worker的状态维护
 			c.WorkerLock.Lock()
-			// c.WStates[WID] = WorkersState{
-			// 	WID:     WID,
-			// 	WStatus: RunMapTask,
-			// 	MTask:   rsp.MapTask,
-			// }
 			c.WStates[WID].WStatus = RunMapTask
 			c.WStates[WID].MTask = rsp.MapTask
 			c.WorkerLock.Unlock()
+			go c.StartTimer(WID, c.TimerChans[WID])
 			return nil
 		}
 		// c.MapStateLock.Unlock()
@@ -284,6 +319,7 @@ func (c *Coordinator) RequestTask(req *TaskRequest, rsp *TaskResponse) error {
 				},
 			}
 			c.WorkerLock.Unlock()
+			go c.StartTimer(WID, c.TimerChans[WID])
 			return nil
 		}
 	}
@@ -343,12 +379,17 @@ func (c *Coordinator) Done() bool {
 	}
 
 	// Your code here.
-	for i := 0; i < len; i++ {
-		c.WorkerLock.Lock()
-		if c.WStates[i].WStatus != Exit {
+	for i := 0; i < c.nReduce; i++ {
+		// c.WorkerLock.Lock()
+		// if c.WStates[i].WStatus != Exit {
+		// 	ret = false
+		// }
+		// c.WorkerLock.Unlock()
+		c.ReduceStateLock.RLock()
+		if c.ReduceState[i] != Completed {
 			ret = false
 		}
-		c.WorkerLock.Unlock()
+		c.ReduceStateLock.RUnlock()
 	}
 
 	return ret
