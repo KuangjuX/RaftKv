@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -31,10 +32,10 @@ type Coordinator struct {
 	nMap    int
 	nReduce int
 	// 用来维护每个任务的状态，用来派发任务
-	MapStateLock sync.Mutex
+	MapStateLock sync.RWMutex
 	MapState     []int
 
-	ReduceStateLock sync.Mutex
+	ReduceStateLock sync.RWMutex
 	ReduceState     []int
 	// 输入的文件名
 	Files []string
@@ -44,18 +45,18 @@ type Coordinator struct {
 
 	// 每个 Worker 的状态维护列表
 	WStates    []WorkersState
-	WorkerLock sync.Mutex
+	WorkerLock sync.RWMutex
 
 	// 对于每个 Worker 维护的计时器channel
 	TimerChans []chan int
 
 	// Reduce数据是否已经准备好
-	ReadyLock     sync.Mutex
-	IsReduceReady bool
+	// ReadyLock     sync.RWMutex
+	IsReduceReady atomic.Value
 
 	// 所有任务是否已经完成
-	TaskLock sync.Mutex
-	TaskEnd  bool
+	// TaskLock sync.RWMutex
+	TaskEnd atomic.Value
 }
 
 type ReduceBucket struct {
@@ -63,31 +64,6 @@ type ReduceBucket struct {
 }
 
 // Your code here -- RPC handlers for the worker to call.
-
-// func (c *Coordinator) HandleWorkerRequest(args *WorkerRequest, reply *WorkerResponse) error {
-// 	reply.MapNums = c.nMap
-// 	reply.ReduceNums = c.nReduce
-// 	reply.Files = c.Files
-// 	return nil
-// }
-
-// func (c *Coordinator) HandleWorkerState(req *WorkerStateReq, rsp *WorkerStateRsp) error {
-// 	WorkerType := req.MachineType
-
-// 	if WorkerType == Map {
-// 		c.MapLock.Lock()
-// 		c.MapState[req.Index] = req.State
-// 		c.MapLock.Unlock()
-// 		// fmt.Printf("[Debug] Map machine %v %v.\n", req.Index, req.State)
-// 	} else if WorkerType == Reduce {
-// 		c.ReduceLock.Lock()
-// 		c.ReduceState[req.Index] = req.State
-// 		c.ReduceLock.Unlock()
-// 		// fmt.Printf("[Debug] Reduce machine %v %v.\n", req.Index, req.State)
-// 	}
-
-// 	return nil
-// }
 
 // 获取Map数据并将其分成Reduce Bucket
 func PushReduceBucket(c *Coordinator) {
@@ -147,11 +123,11 @@ func CheckReduceReady(c *Coordinator) {
 		// 首先判断是否Map数据已经准备好了
 		isMapReady := true
 		for i := 0; i < c.nMap; i++ {
-			c.MapStateLock.Lock()
+			c.MapStateLock.RLock()
 			if c.MapState[i] != Completed {
 				isMapReady = false
 			}
-			c.MapStateLock.Unlock()
+			c.MapStateLock.RUnlock()
 		}
 
 		// 如果Map数据已经准备好了，则去读入所有map数据并将其放入
@@ -159,9 +135,9 @@ func CheckReduceReady(c *Coordinator) {
 		if isMapReady {
 			// 这里处理读入Map的数据并将其放入到Reduce Bucket中
 			PushReduceBucket(c)
-			c.ReadyLock.Lock()
-			c.IsReduceReady = true
-			c.ReadyLock.Unlock()
+			// c.ReadyLock.Lock()
+			c.IsReduceReady.Store(true)
+			// c.ReadyLock.Unlock()
 			fmt.Println("[Reduce Task] Map 任务已经准备好，将为 Worker 派发任务.")
 			return
 		}
@@ -174,15 +150,18 @@ func CheckReduceReady(c *Coordinator) {
 func CheckReduceFin(c *Coordinator) {
 	for {
 		IsReduceFin := true
-		for i := 0; i < len(c.ReduceState); i++ {
+		len := len(c.ReduceState)
+		for i := 0; i < len; i++ {
+			c.ReduceStateLock.RLock()
 			if c.ReduceState[i] != Completed {
 				IsReduceFin = false
 			}
+			c.ReduceStateLock.RUnlock()
 		}
 		if IsReduceFin {
-			c.TaskLock.Lock()
-			c.TaskEnd = false
-			c.TaskLock.Unlock()
+			// c.TaskLock.Lock()
+			c.TaskEnd.Store(true)
+			// c.TaskLock.Unlock()
 			return
 		}
 		time.Sleep(time.Duration(1) * time.Second)
@@ -194,12 +173,12 @@ func (c *Coordinator) UpdateTaskState(WID int) {
 	// fmt.Printf("[Debug] Map status: %v\n", c.MapState)
 	if WID != -1 {
 		if c.WStates[WID].WStatus == RunMapTask {
-			fmt.Printf("[Map Task] Worker %v 完成了 %v号任务.\n", WID, c.WStates[WID].MTask.MapID)
+			fmt.Printf("[Map Task] Worker %v 完成了 %v 号任务.\n", WID, c.WStates[WID].MTask.MapID)
 			c.MapStateLock.Lock()
 			c.MapState[c.WStates[WID].MTask.MapID] = Completed
 			c.MapStateLock.Unlock()
 		} else if c.WStates[WID].WStatus == RunReduceTask {
-			fmt.Printf("[Reduce Task] Worker %v 完成了 %v号任务.\n", WID, c.WStates[WID].MTask.MapID)
+			fmt.Printf("[Reduce Task] Worker %v 完成了 %v 号任务.\n", WID, c.WStates[WID].RTask.ReduceID)
 			c.ReduceStateLock.Lock()
 			c.ReduceState[c.WStates[WID].RTask.ReduceID] = Completed
 			c.ReduceStateLock.Unlock()
@@ -214,7 +193,9 @@ func (c *Coordinator) RequestTask(req *TaskRequest, rsp *TaskResponse) error {
 	if req.WID == -1 {
 		// 为Worker分配索引号
 		rsp.WID = len(c.WStates)
+		c.WorkerLock.Lock()
 		c.WStates = append(c.WStates, WorkersState{})
+		c.WorkerLock.Unlock()
 		// fmt.Printf("分配的 Worker id 为 %v.\n", rsp.WID)
 	}
 
@@ -229,13 +210,16 @@ func (c *Coordinator) RequestTask(req *TaskRequest, rsp *TaskResponse) error {
 	// 循环Master的Map任务状态，判断是否所有任务都完成了
 	// 否则为Worker分发任务
 	// c.MapStateLock.Lock()
+	// c.MapStateLock.RLock()
 	for i := 0; i < len(c.MapState); i++ {
+		// c.MapStateLock.RLock()
 		if c.MapState[i] == Idle {
+			// c.MapStateLock.RUnlock()
 			c.MapStateLock.Lock()
 			c.MapState[i] = Progress
 			c.MapStateLock.Unlock()
 
-			fmt.Printf("[Map Task] 此时 Worker %v 运行 %v号任务.\n", WID, i)
+			fmt.Printf("[Map Task] 此时 Worker %v 运行 %v 号任务.\n", WID, i)
 
 			// 更新对于Map任务状态
 			rsp.TaskStatus = RunMapTask
@@ -258,10 +242,11 @@ func (c *Coordinator) RequestTask(req *TaskRequest, rsp *TaskResponse) error {
 		}
 		// c.MapStateLock.Unlock()
 	}
-	// c.MapStateLock.Unlock()
+	// c.MapStateLock.RUnlock()
 
 	// 如果没有准备好Reduce Bucket，则进入等待状态
-	if !c.IsReduceReady {
+	// c.ReadyLock.RLock()
+	if c.IsReduceReady.Load() == false {
 		rsp.WID = WID
 		rsp.TaskStatus = Wait
 		// 更新Master对于Worker的状态
@@ -270,15 +255,19 @@ func (c *Coordinator) RequestTask(req *TaskRequest, rsp *TaskResponse) error {
 		c.WorkerLock.Unlock()
 		return nil
 	}
+	// c.ReadyLock.RUnlock()
 
-	for i := 0; i < len(c.MapState); i++ {
+	// c.ReduceStateLock.RLock()
+	for i := 0; i < len(c.ReduceState); i++ {
+		// c.ReduceStateLock.RLock()
 		if c.ReduceState[i] == Idle {
+			// c.ReduceStateLock.RUnlock()
 			c.ReduceStateLock.Lock()
 			c.ReduceState[i] = Progress
-			c.ReadyLock.Unlock()
+			c.ReduceStateLock.Unlock()
+
 			fmt.Printf("[Reduce Task] 此时 Worker %v 运行 %v 号任务.\n", WID, i)
 
-			rsp.WID = WID
 			rsp.TaskStatus = RunReduceTask
 			rsp.ReduceTask = ReduceTask{
 				ReduceID: i,
@@ -298,8 +287,10 @@ func (c *Coordinator) RequestTask(req *TaskRequest, rsp *TaskResponse) error {
 			return nil
 		}
 	}
+	// c.ReduceStateLock.RUnlock()
 
-	if !c.TaskEnd {
+	// c.TaskLock.RLock()
+	if c.TaskEnd.Load() == false {
 		rsp.WID = WID
 		rsp.TaskStatus = Wait
 		// 更新Master状态
@@ -311,13 +302,11 @@ func (c *Coordinator) RequestTask(req *TaskRequest, rsp *TaskResponse) error {
 		c.WorkerLock.Unlock()
 		return nil
 	}
+	// c.TaskLock.RUnlock()
 
 	rsp.TaskStatus = Exit
 	c.WorkerLock.Lock()
-	c.WStates[WID] = WorkersState{
-		WID:     WID,
-		WStatus: Exit,
-	}
+	c.WStates[WID].WStatus = Exit
 	c.WorkerLock.Unlock()
 
 	return nil
@@ -346,12 +335,15 @@ func (c *Coordinator) server() {
 //
 func (c *Coordinator) Done() bool {
 	ret := true
-	if len(c.WStates) == 0 {
+	c.WorkerLock.RLock()
+	len := len(c.WStates)
+	c.WorkerLock.RUnlock()
+	if len == 0 {
 		return false
 	}
 
 	// Your code here.
-	for i := 0; i < len(c.WStates); i++ {
+	for i := 0; i < len; i++ {
 		c.WorkerLock.Lock()
 		if c.WStates[i].WStatus != Exit {
 			ret = false
@@ -379,8 +371,8 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c.MapState = make([]int, c.nMap)
 	c.ReduceState = make([]int, c.nReduce)
 	// 初始化任务完成情况，判断当Worker轮询时是否返回Wait状态
-	c.IsReduceReady = false
-	c.TaskEnd = false
+	c.IsReduceReady.Store(false)
+	c.TaskEnd.Store(false)
 	for i := 0; i < c.nMap; i++ {
 		c.MapState[i] = Idle
 	}

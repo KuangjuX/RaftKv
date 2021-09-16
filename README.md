@@ -97,9 +97,9 @@ type WorkerManager struct {
 - [x] wc
 - [x] indexer
 - [x] jobcount 
-- [ ] mtiming
-- [ ] rtiming
-- [ ] early_exit
+- [x] mtiming
+- [x] rtiming
+- [x] early_exit
 - [ ] nocrash
 - [ ] crash
 
