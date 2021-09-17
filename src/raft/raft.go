@@ -19,6 +19,7 @@ package raft
 
 import (
 	//	"bytes"
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -49,6 +50,13 @@ type ApplyMsg struct {
 	SnapshotIndex int
 }
 
+type LogEntry struct {
+	// 状态机命令
+	Command string
+	// 领导者接收到该条目的任期（第一个索引为1）
+	Term int
+}
+
 //
 // A Go object implementing a single Raft peer.
 //
@@ -69,7 +77,7 @@ type Raft struct {
 	// 当前任期内收到选票的候选人id，如果没有头给人和候选者，则为空
 	VotedFor int
 	// 日志条目，每个条目包含了用于状态机的命令，以及领导者接收到该条目时的任期（第一个索引为1）
-	Log []int
+	Log []LogEntry
 
 	// 服务器上的易失性状态
 	// 已知已提交的最高的日志条目的索引（初始值为0，单调递增）
@@ -155,8 +163,18 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
 //
+// 候选人请求投票
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
+	// In Raft Paper Figure2
+	// 候选人的任期号
+	Term int
+	// 请求选票的候选人的id
+	Candidateld int
+	// 候选人的最后日志条目的索引值
+	LastLogIndex int
+	// 候选人最后日志条目的任期号
+	LastLogTerm int
 }
 
 //
@@ -165,6 +183,10 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
+	// 当前任期号，以便于候选人去更新自己的任期号
+	Term int
+	// 候选人赢得了此张选票时为真
+	VoteGranted bool
 }
 
 //
@@ -173,6 +195,16 @@ type RequestVoteReply struct {
 // 候选人向其他节点寻求选票
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+	if args.Term < rf.CurrentTerm {
+		fmt.Printf("[寻求选票] 候选人任期小于自己的任期.\n")
+		reply.VoteGranted = false
+	}
+
+	// 如果 VotedFor 为空或者为Candidateld,并且候选人的日志指导和自己一样新，
+	// 那么就投票给他
+	if rf.VotedFor == -1 && args.LastLogTerm >= rf.Log[rf.CommitIndex].Term {
+		reply.VoteGranted = true
+	}
 }
 
 //
@@ -263,6 +295,12 @@ func (rf *Raft) ticker() {
 		// be started and to randomize sleeping time using
 		// time.Sleep().
 
+		// 向所有节点发送选举并设置随机任期时间
+		for i := 0; i < len(rf.peers); i++ {
+			req := RequestVoteArgs{}
+			rsp := RequestVoteReply{}
+			go rf.sendRequestVote(i, &req, &rsp)
+		}
 	}
 }
 

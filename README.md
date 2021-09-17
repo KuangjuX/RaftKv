@@ -287,6 +287,7 @@ func Worker(mapf func(string, string) []KeyValue,
 - [x] crash
 
 ## Lab-2 Raft
+![](static/raft-2.png)
 ### Lab-2A Leader election
 Raft 的结构定义由论文的 Figure2 定义如下：
 ```golang
@@ -307,7 +308,7 @@ type Raft struct {
 	// 当前任期内收到选票的候选人id，如果没有头给人和候选者，则为空
 	VotedFor int
 	// 日志条目，每个条目包含了用于状态机的命令，以及领导者接收到该条目时的任期（第一个索引为1）
-	Log []int
+	Log []LogEntry
 
 	// 服务器上的易失性状态
 	// 已知已提交的最高的日志条目的索引（初始值为0，单调递增）
