@@ -287,5 +287,38 @@ func Worker(mapf func(string, string) []KeyValue,
 - [x] crash
 
 ## Lab-2 Raft
+### Lab-2A Leader election
+Raft 的结构定义由论文的 Figure2 定义如下：
+```golang
+type Raft struct {
+	mu        sync.Mutex          // Lock to protect shared access to this peer's state
+	peers     []*labrpc.ClientEnd // RPC end points of all peers
+	persister *Persister          // Object to hold this peer's persisted state
+	me        int                 // this peer's index into peers[]
+	dead      int32               // set by Kill()
 
+	// Your data here (2A, 2B, 2C).
+	// Look at the paper's Figure 2 for a description of what
+	// state a Raft server must maintain.
+
+	// 状态参数
+	// 服务器已知最新任期（在服务器首次启动的时候初始化为0，单调递增）
+	CurrentTerm int
+	// 当前任期内收到选票的候选人id，如果没有头给人和候选者，则为空
+	VotedFor int
+	// 日志条目，每个条目包含了用于状态机的命令，以及领导者接收到该条目时的任期（第一个索引为1）
+	Log []int
+
+	// 服务器上的易失性状态
+	// 已知已提交的最高的日志条目的索引（初始值为0，单调递增）
+	CommitIndex int
+	// 已经被应用到状态机的最高的日至条目的索引（初始值为0，单调递增）
+	LastApplied int
+	// 领导者（服务器）上的易失性状态（选举后已经重新初始化）
+	// 对于每一台服务器，发送到该服务器的下一个日志条目的索引（初始值为领导者最后的日志条目的索引 + 1）
+	NextIndex []int
+	// 对于每一台服务器，已知的已经复制到该服务器的最高日志条目的索引（初始值为0，单调递增）
+	MatchIndex []int
+}
+```
 
