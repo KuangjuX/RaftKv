@@ -19,9 +19,12 @@ package raft
 
 import (
 	//	"bytes"
+	// "crypto/rand"
 	"fmt"
+	"math/rand"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	//	"6.824/labgob"
 	"6.824/labrpc"
@@ -319,6 +322,17 @@ func (rf *Raft) ticker() {
 		// be started and to randomize sleeping time using
 		// time.Sleep().
 
+		// 生成随机时间
+		min := 200
+		max := 300
+		randTime := rand.Intn(max-min) + min
+		time.Sleep(time.Duration(randTime))
+
+		// 选举超时后查看自己的状态
+		if rf.State == Leader {
+			// 发送心跳检测
+			fmt.Printf("节点 %v 是领导者.\n", rf.me)
+		}
 	}
 }
 
