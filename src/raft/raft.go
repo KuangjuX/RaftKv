@@ -27,6 +27,12 @@ import (
 	"6.824/labrpc"
 )
 
+const (
+	Follwer    = 0
+	Candidates = 1
+	Leader     = 2
+)
+
 //
 // as each Raft peer becomes aware that successive log entries are
 // committed, the peer should send an ApplyMsg to the service (or
@@ -89,6 +95,24 @@ type Raft struct {
 	NextIndex []int
 	// 对于每一台服务器，已知的已经复制到该服务器的最高日志条目的索引（初始值为0，单调递增）
 	MatchIndex []int
+
+	// 记录此台服务器的状态
+	State int
+}
+
+type AppendEntries struct {
+	// 领导人的任期
+	Term int
+	// 领导人ID， 因此跟随者可以对客户端进行重定向
+	LeaderID int
+	// 紧邻新日志条目之前的那个日志条目的索引
+	PrevLogIndex int
+	// 紧邻新日志条目之前的那个日志条目的任期
+	PrevLogTerm int
+	// 需要被保存的日志条目（被当作心跳使用，则日志条目内容为空；为了提高效率可能一次性发送多个）
+	Entries []LogEntry
+	// 领导者的已知已提交的最高的日志条目的索引
+	LeaderCommit int
 }
 
 // return currentTerm and whether this server
@@ -295,12 +319,6 @@ func (rf *Raft) ticker() {
 		// be started and to randomize sleeping time using
 		// time.Sleep().
 
-		// 向所有节点发送选举并设置随机任期时间
-		for i := 0; i < len(rf.peers); i++ {
-			req := RequestVoteArgs{}
-			rsp := RequestVoteReply{}
-			go rf.sendRequestVote(i, &req, &rsp)
-		}
 	}
 }
 
