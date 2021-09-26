@@ -21,7 +21,6 @@ import (
 	//	"bytes"
 	// "crypto/rand"
 	"fmt"
-	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -101,6 +100,8 @@ type Raft struct {
 
 	// 记录此台服务器的状态
 	State int
+	// 记录此台服务器上次接收心跳检测的时间
+	HeartBeat time.Time
 }
 
 type AppendEntries struct {
@@ -118,12 +119,24 @@ type AppendEntries struct {
 	LeaderCommit int
 }
 
+type AppendEntriesReply struct {
+	Term    int
+	Success bool
+}
+
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
 
 	var term int
 	var isleader bool
+
+	term = rf.CurrentTerm
+	if rf.State == Leader {
+		isleader = true
+	} else {
+		isleader = false
+	}
 	// Your code here (2A).
 	return term, isleader
 }
@@ -197,7 +210,7 @@ type RequestVoteArgs struct {
 	// 候选人的任期号
 	Term int
 	// 请求选票的候选人的id
-	Candidateld int
+	CandidateId int
 	// 候选人的最后日志条目的索引值
 	LastLogIndex int
 	// 候选人最后日志条目的任期号
@@ -313,6 +326,51 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
+func (rf *Raft) getHeartBeatTime() time.Time {
+
+}
+
+func (rf *Raft) getelectionTimeout() time.Duration {
+
+}
+
+// Leader 需要向 flowers 周期性地发送心跳包
+func (rf *Raft) sendHeartBeats() {
+
+}
+
+// 候选人发起选举
+func (rf *Raft) election() {
+	// 发起选举，首先增加自己的任期
+	rf.CurrentTerm += 1
+	// 转变为候选人状态
+	rf.State = Candidates
+	// 为自己投一票
+	rf.VotedFor = rf.me
+	// 并行地向除自己的服务器索要选票
+	// 如果没有收到选票，它会反复尝试，直到发生以下三种情况之一：
+	// 1. 获得超过半数的选票；成为 Leader，并向其他节点发送 AppendEntries 心跳;
+	// 2. 收到来自 Leader 的 RPC， 转为 Follwer
+	// 3. 其他两种情况都没发生，没人能够获胜（electionTimeout 已过）：增加 currentTerm,
+	// 开始新一轮选举
+	for i := 0; i < len(rf.peers); i++ {
+		if i != rf.me {
+			req := RequestVoteArgs{}
+			reply := RequestVoteReply{}
+			// 初始化请求的参数
+			req.Term = rf.CurrentTerm
+			req.CandidateId = rf.me
+			req.LastLogIndex = len(rf.Log)
+			if len(rf.Log) == 0 {
+				req.LastLogTerm = 1
+			} else {
+				req.LastLogTerm = rf.Log[len(rf.Log)-1].Term
+			}
+			go rf.sendRequestVote(rf.me, &req, &reply)
+		}
+	}
+}
+
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
 func (rf *Raft) ticker() {
@@ -322,16 +380,18 @@ func (rf *Raft) ticker() {
 		// be started and to randomize sleeping time using
 		// time.Sleep().
 
-		// 生成随机时间
-		min := 200
-		max := 300
-		randTime := rand.Intn(max-min) + min
-		time.Sleep(time.Duration(randTime))
+		electionTimeOut := rf.getelectionTimeout()
+		time.Sleep(electionTimeOut)
 
-		// 选举超时后查看自己的状态
-		if rf.State == Leader {
-			// 发送心跳检测
-			fmt.Printf("节点 %v 是领导者.\n", rf.me)
+		duration := time.Since(rf.getHeartBeatTime())
+
+		// 如果超过选举超时时间没有接收到心跳包，则变成候选者发起选举
+		if duration > electionTimeOut {
+			rf.election()
+		} else {
+			// 如果接到了心跳包则变成追随者
+			fmt.Printf("[Debug] %v is follower.\n", rf.me)
+			continue
 		}
 	}
 }
@@ -354,6 +414,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 
+	rf.State = Follwer
+	rf.CurrentTerm = 1
+
 	// Your initialization code here (2A, 2B, 2C).
 
 	// initialize from state persisted before a crash
@@ -361,6 +424,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
+
+	// Leader send heartbeats to all followers
+	go rf.sendHeartBeats()
 
 	return rf
 }
