@@ -21,6 +21,7 @@ import (
 	//	"bytes"
 	// "crypto/rand"
 	"fmt"
+	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -281,6 +282,10 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
+func (rf *Raft) sendAppendEntries(server int) bool {
+	false
+}
+
 //
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
@@ -327,16 +332,24 @@ func (rf *Raft) killed() bool {
 }
 
 func (rf *Raft) getHeartBeatTime() time.Time {
-
+	return rf.HeartBeat
 }
 
 func (rf *Raft) getelectionTimeout() time.Duration {
-
+	min := 200
+	max := 300
+	randTime := rand.Intn(max-min) + min
+	electionTimeout := time.Duration(randTime)
+	return electionTimeout
 }
 
 // Leader 需要向 flowers 周期性地发送心跳包
 func (rf *Raft) sendHeartBeats() {
-
+	if rf.State == Leader {
+		for index := 0; index < len(rf.peers); index++ {
+			go rf.sendAppendEntries(index)
+		}
+	}
 }
 
 // 候选人发起选举
@@ -366,7 +379,7 @@ func (rf *Raft) election() {
 			} else {
 				req.LastLogTerm = rf.Log[len(rf.Log)-1].Term
 			}
-			go rf.sendRequestVote(rf.me, &req, &reply)
+			go rf.sendRequestVote(i, &req, &reply)
 		}
 	}
 }
@@ -380,13 +393,13 @@ func (rf *Raft) ticker() {
 		// be started and to randomize sleeping time using
 		// time.Sleep().
 
-		electionTimeOut := rf.getelectionTimeout()
-		time.Sleep(electionTimeOut)
+		electionTimeout := rf.getelectionTimeout()
+		time.Sleep(electionTimeout)
 
 		duration := time.Since(rf.getHeartBeatTime())
 
 		// 如果超过选举超时时间没有接收到心跳包，则变成候选者发起选举
-		if duration > electionTimeOut {
+		if duration > electionTimeout {
 			rf.election()
 		} else {
 			// 如果接到了心跳包则变成追随者
@@ -425,7 +438,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// start ticker goroutine to start elections
 	go rf.ticker()
 
-	// Leader send heartbeats to all followers
+	// Leader check self status and send heartbeats
 	go rf.sendHeartBeats()
 
 	return rf

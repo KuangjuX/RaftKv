@@ -310,7 +310,12 @@ Raft 算法使用随机选举超时时间的方法来确保很少会发生选票
   
 首先，在所有服务器启动时会异步启动一个 goroutine 来随机计时，当计时时间到了的时候跟随者会成为候选人并向其他服务器节点发送选票，这里我们需要遍历所有除自己的服务器节点，并为每个节点启动一个 goroutine 发送选票。当等待所有选票回复后则查看自己选票数，倘若赢得大多数选票则自动成为领导人并向其他节点发送心跳包，否则自动成为追随者并设置任期时长。  
    
-在 `ticker` 中，我们需要设定随机的休眠时间，在休眠过后表明选举超时，此时需要去向其他服务器节点发送选举请求，如果发送自己是领导人，则向其他节点发送心跳包。
+在 `ticker` 中，我们需要设定随机的休眠时间，在休眠过后判断最近是否接收到心跳包，如果未接收到则表明选举超时，此时需要去向其他服务器节点周期性地发送选举请求，直到发生以下情况：
+- 自己成为了leader
+- 收到其他节点发送来的心跳包
+- 该任期内无 leader，变成候选人重新开启选举 
+   
+同时，我们也需要异步检查自己的状态是否是 leader 并向其他节点周期性地发送心跳包
 
 Raft 的结构定义由论文的 Figure2 定义如下：
 ```golang
@@ -343,6 +348,32 @@ type Raft struct {
 	NextIndex []int
 	// 对于每一台服务器，已知的已经复制到该服务器的最高日志条目的索引（初始值为0，单调递增）
 	MatchIndex []int
+}
+``` 
+
+`ticker` 的实现如下所示:
+```golang
+func (rf *Raft) ticker() {
+	for !rf.killed() {
+
+		// Your code here to check if a leader election should
+		// be started and to randomize sleeping time using
+		// time.Sleep().
+
+		electionTimeOut := rf.getelectionTimeout()
+		time.Sleep(electionTimeOut)
+
+		duration := time.Since(rf.getHeartBeatTime())
+
+		// 如果超过选举超时时间没有接收到心跳包，则变成候选者发起选举
+		if duration > electionTimeOut {
+			rf.election()
+		} else {
+			// 如果接到了心跳包则变成追随者
+			fmt.Printf("[Debug] %v is follower.\n", rf.me)
+			continue
+		}
+	}
 }
 ```
 
