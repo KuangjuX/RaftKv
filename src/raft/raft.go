@@ -84,7 +84,7 @@ type Raft struct {
 	// 状态参数
 	// 服务器已知最新任期（在服务器首次启动的时候初始化为0，单调递增）
 	CurrentTerm int
-	// 当前任期内收到选票的候选人id，如果没有头给人和候选者，则为空
+	// 当前任期内收到选票的候选人id，如果没有投给人和候选者，则为空
 	VotedFor int
 	// 日志条目，每个条目包含了用于状态机的命令，以及领导者接收到该条目时的任期（第一个索引为1）
 	Log []LogEntry
@@ -104,6 +104,9 @@ type Raft struct {
 	State int
 	// 记录此台服务器上次接收心跳检测的时间
 	HeartBeat time.Time
+
+	// 记录投票给这个服务器节点的数据
+	VoteNums int
 }
 
 type AppendEntries struct {
@@ -267,10 +270,10 @@ func (rf *Raft) RequestAppendEntries(args *AppendEntries, reply *AppendEntriesRe
 		reply.Success = false
 		reply.Term = rf.CurrentTerm
 		return
-	} else if rf.Log[args.PrevLogIndex].Term != args.PrevLogTerm {
+	} else if rf.Log[args.PrevLogIndex-1].Term != args.PrevLogTerm {
 		// 如果一个已经存在的条目和新条目（译者注：即刚刚接收到的日志条目）发生了冲突,
 		// 那么就删除这个已经存在的条目以及它之后的所有条目
-		rf.Log = rf.Log[:args.PrevLogIndex-1]
+		rf.Log = rf.Log[:args.PrevLogIndex-2]
 	}
 	// 追加日志中尚未存在的任何新条目
 	rf.Log = append(rf.Log, args.Entries...)
@@ -280,10 +283,10 @@ func (rf *Raft) RequestAppendEntries(args *AppendEntries, reply *AppendEntriesRe
 	// 领导者的已知已经提交的最高的日志条目的索引leaderCommit
 	// 或者是 上一个新条目的索引 取两者的最小值
 	if args.LeaderCommit > rf.CommitIndex {
-		if args.LeaderCommit < len(rf.Log)-1 {
+		if args.LeaderCommit < len(rf.Log) {
 			rf.CommitIndex = args.LeaderCommit
 		} else {
-			rf.CommitIndex = len(rf.Log) - 1
+			rf.CommitIndex = len(rf.Log)
 		}
 	}
 	reply.Success = true
@@ -319,8 +322,15 @@ func (rf *Raft) RequestAppendEntries(args *AppendEntries, reply *AppendEntriesRe
 // that the caller passes the address of the reply struct with &, not
 // the struct itself.
 //
-func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
+func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply, wg *sync.WaitGroup) bool {
+	defer wg.Done()
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	if rf.CurrentTerm < reply.Term {
+		rf.CurrentTerm = reply.Term
+	}
+	if reply.VoteGranted {
+		rf.VoteNums += 1
+	}
 	return ok
 }
 
@@ -422,6 +432,7 @@ func (rf *Raft) election() {
 	for {
 		if !rf.killed() && rf.State == Candidates {
 			// 如果当前节点没有宕机并且仍为候选人时周期性地向所有节点发送投票请求
+			var wg sync.WaitGroup
 			for i := 0; i < len(rf.peers); i++ {
 				if i != rf.me {
 					req := RequestVoteArgs{}
@@ -435,8 +446,15 @@ func (rf *Raft) election() {
 					} else {
 						req.LastLogTerm = rf.Log[len(rf.Log)-1].Term
 					}
-					go rf.sendRequestVote(i, &req, &reply)
+					wg.Add(1)
+					go rf.sendRequestVote(i, &req, &reply, &wg)
 				}
+			}
+			wg.Done()
+			if rf.VoteNums > len(rf.peers)/2 {
+				// 获得超过半数的选票，成为 Leader
+				rf.State = Leader
+				return
 			}
 		} else {
 			return
