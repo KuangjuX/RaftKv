@@ -59,6 +59,7 @@ type ApplyMsg struct {
 	SnapshotIndex int
 }
 
+// LogEntry 结构体定义
 type LogEntry struct {
 	// 状态机命令
 	Command string
@@ -236,16 +237,57 @@ type RequestVoteReply struct {
 // 候选人向其他节点寻求选票
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+	// 如果term < currentTerm返回 false
 	if args.Term < rf.CurrentTerm {
 		fmt.Printf("[寻求选票] 候选人任期小于自己的任期.\n")
 		reply.VoteGranted = false
 	}
 
-	// 如果 VotedFor 为空或者为Candidateld,并且候选人的日志指导和自己一样新，
-	// 那么就投票给他
+	// 如果 votedFor 为空或者为 candidateId，
+	// 并且候选人的日志至少和自己一样新，那么就投票给他
 	if rf.VotedFor == -1 && args.LastLogTerm >= rf.Log[rf.CommitIndex].Term {
 		reply.VoteGranted = true
 	}
+}
+
+// Leader 向 Follower 发送心跳包
+func (rf *Raft) RequestAppendEntries(args *AppendEntries, reply *AppendEntriesReply) {
+	if args.Term > rf.CurrentTerm {
+		rf.CurrentTerm = args.Term
+		rf.State = Follwer
+	}
+	if args.Term < rf.CurrentTerm {
+		// 如果领导者的任期小于接收者的当前任期，返回假
+		reply.Success = false
+		reply.Term = rf.CurrentTerm
+		return
+	}
+	if len(rf.Log) < args.PrevLogIndex {
+		// 此时 follower 的日志索引缺少
+		reply.Success = false
+		reply.Term = rf.CurrentTerm
+		return
+	} else if rf.Log[args.PrevLogIndex].Term != args.PrevLogTerm {
+		// 如果一个已经存在的条目和新条目（译者注：即刚刚接收到的日志条目）发生了冲突,
+		// 那么就删除这个已经存在的条目以及它之后的所有条目
+		rf.Log = rf.Log[:args.PrevLogIndex-1]
+	}
+	// 追加日志中尚未存在的任何新条目
+	rf.Log = append(rf.Log, args.Entries...)
+	// 如果领导者的已知已经提交的最高的日志条目的索引leaderCommit
+	// 大于接收者的已知已经提交的最高的日志条目的索引commitIndex,
+	// 则把接收者的已知已经提交的最高的日志条目的索引commitIndex重置为
+	// 领导者的已知已经提交的最高的日志条目的索引leaderCommit
+	// 或者是 上一个新条目的索引 取两者的最小值
+	if args.LeaderCommit > rf.CommitIndex {
+		if args.LeaderCommit < len(rf.Log)-1 {
+			rf.CommitIndex = args.LeaderCommit
+		} else {
+			rf.CommitIndex = len(rf.Log) - 1
+		}
+	}
+	reply.Success = true
+	reply.Term = rf.CurrentTerm
 }
 
 //
@@ -282,8 +324,9 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
-func (rf *Raft) sendAppendEntries(server int) bool {
-	false
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntries, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.RequestAppendEntries", args, reply)
+	return ok
 }
 
 //
@@ -331,23 +374,33 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
+// 获取最近一次收到心跳包的时间
 func (rf *Raft) getHeartBeatTime() time.Time {
 	return rf.HeartBeat
 }
 
 func (rf *Raft) getelectionTimeout() time.Duration {
-	min := 200
-	max := 300
+	min := 500
+	max := 1000
 	randTime := rand.Intn(max-min) + min
-	electionTimeout := time.Duration(randTime)
+	electionTimeout := time.Millisecond * time.Duration(randTime)
 	return electionTimeout
 }
 
 // Leader 需要向 flowers 周期性地发送心跳包
 func (rf *Raft) sendHeartBeats() {
-	if rf.State == Leader {
-		for index := 0; index < len(rf.peers); index++ {
-			go rf.sendAppendEntries(index)
+	for {
+		if !rf.killed() {
+			// 如果节点的状态为领导者，则周期性地向每个节点发送心跳包
+			if rf.State == Leader {
+				for index := 0; index < len(rf.peers); index++ {
+					args := &AppendEntries{}
+					reply := &AppendEntriesReply{}
+					go rf.sendAppendEntries(index, args, reply)
+				}
+			}
+			duration := time.Millisecond * 100
+			time.Sleep(duration)
 		}
 	}
 }
@@ -366,21 +419,31 @@ func (rf *Raft) election() {
 	// 2. 收到来自 Leader 的 RPC， 转为 Follwer
 	// 3. 其他两种情况都没发生，没人能够获胜（electionTimeout 已过）：增加 currentTerm,
 	// 开始新一轮选举
-	for i := 0; i < len(rf.peers); i++ {
-		if i != rf.me {
-			req := RequestVoteArgs{}
-			reply := RequestVoteReply{}
-			// 初始化请求的参数
-			req.Term = rf.CurrentTerm
-			req.CandidateId = rf.me
-			req.LastLogIndex = len(rf.Log)
-			if len(rf.Log) == 0 {
-				req.LastLogTerm = 1
-			} else {
-				req.LastLogTerm = rf.Log[len(rf.Log)-1].Term
+	for {
+		if !rf.killed() && rf.State == Candidates {
+			// 如果当前节点没有宕机并且仍为候选人时周期性地向所有节点发送投票请求
+			for i := 0; i < len(rf.peers); i++ {
+				if i != rf.me {
+					req := RequestVoteArgs{}
+					reply := RequestVoteReply{}
+					// 初始化请求的参数
+					req.Term = rf.CurrentTerm
+					req.CandidateId = rf.me
+					req.LastLogIndex = len(rf.Log)
+					if len(rf.Log) == 0 {
+						req.LastLogTerm = 1
+					} else {
+						req.LastLogTerm = rf.Log[len(rf.Log)-1].Term
+					}
+					go rf.sendRequestVote(i, &req, &reply)
+				}
 			}
-			go rf.sendRequestVote(i, &req, &reply)
+		} else {
+			return
 		}
+		// 休息一段时间再向服务器节点发送投票请求
+		duration := time.Millisecond * 100
+		time.Sleep(duration)
 	}
 }
 
@@ -438,7 +501,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// start ticker goroutine to start elections
 	go rf.ticker()
 
-	// Leader check self status and send heartbeats
+	// 每个结点应当检查自己的状态，
+	// 如果是 leader 的话，就向其他节点发送心跳包
 	go rf.sendHeartBeats()
 
 	return rf
