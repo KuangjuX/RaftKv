@@ -248,8 +248,14 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	// 如果 votedFor 为空或者为 candidateId，
 	// 并且候选人的日志至少和自己一样新，那么就投票给他
-	if rf.VotedFor == -1 && args.LastLogTerm >= rf.Log[rf.CommitIndex].Term {
-		reply.VoteGranted = true
+	if rf.VotedFor == -1 {
+		if len(rf.Log) == 0 {
+			reply.VoteGranted = true
+			rf.VotedFor = args.CandidateId
+		} else if args.LastLogTerm >= rf.Log[rf.CommitIndex].Term {
+			reply.VoteGranted = true
+			rf.VotedFor = args.CandidateId
+		}
 	}
 }
 
@@ -289,6 +295,8 @@ func (rf *Raft) RequestAppendEntries(args *AppendEntries, reply *AppendEntriesRe
 			rf.CommitIndex = len(rf.Log)
 		}
 	}
+	now := time.Now()
+	rf.HeartBeat = now
 	reply.Success = true
 	reply.Term = rf.CurrentTerm
 }
@@ -322,13 +330,16 @@ func (rf *Raft) RequestAppendEntries(args *AppendEntries, reply *AppendEntriesRe
 // that the caller passes the address of the reply struct with &, not
 // the struct itself.
 //
-func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply, wg *sync.WaitGroup) bool {
-	defer wg.Done()
+func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
+	fmt.Printf("[Debug] 向服务器节点%v发送选举投票\n", server)
+	// defer wg.Done()
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	if rf.CurrentTerm < reply.Term {
 		rf.CurrentTerm = reply.Term
 	}
+	fmt.Printf("[Debug] server%v是否承认:%v\n", server, reply.VoteGranted)
 	if reply.VoteGranted {
+		fmt.Printf("[Debug] 节点%v发送了承认选票\n", server)
 		rf.VoteNums += 1
 	}
 	return ok
@@ -400,14 +411,25 @@ func (rf *Raft) getelectionTimeout() time.Duration {
 // Leader 需要向 flowers 周期性地发送心跳包
 func (rf *Raft) sendHeartBeats() {
 	for {
-		if !rf.killed() {
-			// 如果节点的状态为领导者，则周期性地向每个节点发送心跳包
-			if rf.State == Leader {
-				for index := 0; index < len(rf.peers); index++ {
-					args := &AppendEntries{}
-					reply := &AppendEntriesReply{}
-					go rf.sendAppendEntries(index, args, reply)
+		if !rf.killed() && rf.State == Leader {
+			// 如果节点的状态为领导者并且节点没有宕机，则周期性地向每个节点发送心跳包
+			for index := 0; index < len(rf.peers); index++ {
+				args := &AppendEntries{}
+				reply := &AppendEntriesReply{}
+				args.Term = rf.CurrentTerm
+				args.LeaderID = rf.me
+				args.PrevLogIndex = len(rf.Log)
+				args.PrevLogTerm = rf.Log[args.PrevLogIndex-1].Term
+				var entry []LogEntry
+				log := LogEntry{
+					Command: "",
+					Term:    rf.CurrentTerm,
 				}
+				entry = append(entry, log)
+				rf.Log = append(rf.Log, log)
+				args.Entries = entry
+				args.LeaderCommit = rf.CommitIndex
+				go rf.sendAppendEntries(index, args, reply)
 			}
 			duration := time.Millisecond * 100
 			time.Sleep(duration)
@@ -430,9 +452,11 @@ func (rf *Raft) election() {
 	// 3. 其他两种情况都没发生，没人能够获胜（electionTimeout 已过）：增加 currentTerm,
 	// 开始新一轮选举
 	for {
+		// wg := new(sync.WaitGroup)
 		if !rf.killed() && rf.State == Candidates {
+			fmt.Printf("[Debug] 向%v节点发送请求\n", len(rf.peers)-1)
+			// wg.Add(len(rf.peers))
 			// 如果当前节点没有宕机并且仍为候选人时周期性地向所有节点发送投票请求
-			var wg sync.WaitGroup
 			for i := 0; i < len(rf.peers); i++ {
 				if i != rf.me {
 					req := RequestVoteArgs{}
@@ -446,13 +470,15 @@ func (rf *Raft) election() {
 					} else {
 						req.LastLogTerm = rf.Log[len(rf.Log)-1].Term
 					}
-					wg.Add(1)
-					go rf.sendRequestVote(i, &req, &reply, &wg)
+					// wg.Add(1)
+					go rf.sendRequestVote(i, &req, &reply)
 				}
 			}
-			wg.Done()
+			time.Sleep(time.Millisecond * 100)
+			// wg.Done()
 			if rf.VoteNums > len(rf.peers)/2 {
 				// 获得超过半数的选票，成为 Leader
+				fmt.Printf("[Debug] Server%v得到超过半数选票，成为Leader\n", rf.me)
 				rf.State = Leader
 				return
 			}
@@ -510,6 +536,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	rf.State = Follwer
 	rf.CurrentTerm = 1
+	rf.VotedFor = -1
 
 	// Your initialization code here (2A, 2B, 2C).
 
