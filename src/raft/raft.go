@@ -418,8 +418,13 @@ func (rf *Raft) sendHeartBeats() {
 				reply := &AppendEntriesReply{}
 				args.Term = rf.CurrentTerm
 				args.LeaderID = rf.me
-				args.PrevLogIndex = len(rf.Log)
-				args.PrevLogTerm = rf.Log[args.PrevLogIndex-1].Term
+				if len(rf.Log) == 0 {
+					args.PrevLogIndex = 1
+					args.PrevLogTerm = rf.CurrentTerm
+				} else {
+					args.PrevLogIndex = len(rf.Log)
+					args.PrevLogTerm = rf.Log[args.PrevLogIndex-1].Term
+				}
 				var entry []LogEntry
 				log := LogEntry{
 					Command: "",
