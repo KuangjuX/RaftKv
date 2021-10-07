@@ -107,6 +107,8 @@ type Raft struct {
 
 	// 记录投票给这个服务器节点的数据
 	VoteNums int
+	// 记录最新一次投票的任期
+	VotedTerm int
 }
 
 type AppendEntries struct {
@@ -249,13 +251,16 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.CurrentTerm = args.Term
 	// 如果 votedFor 为空或者为 candidateId，
 	// 并且候选人的日志至少和自己一样新，那么就投票给他
-	if rf.VotedFor == -1 {
+	if rf.VotedTerm+1 < args.Term && rf.VotedFor != args.CandidateId {
+		fmt.Printf("[Debug] 节点%v的VotedTerm为%v,VotedFor为%v,请求服务器节点为%v,任期为%v\n", rf.me, rf.VotedTerm, rf.VotedFor, args.CandidateId, args.Term)
 		if len(rf.Log) == 0 {
 			reply.VoteGranted = true
 			rf.VotedFor = args.CandidateId
+			rf.VotedTerm = args.Term
 		} else if args.LastLogTerm >= rf.Log[rf.CommitIndex].Term {
 			reply.VoteGranted = true
 			rf.VotedFor = args.CandidateId
+			rf.VotedTerm = args.Term
 		}
 	}
 }
@@ -280,7 +285,11 @@ func (rf *Raft) RequestAppendEntries(args *AppendEntries, reply *AppendEntriesRe
 	} else if rf.Log[args.PrevLogIndex-1].Term != args.PrevLogTerm {
 		// 如果一个已经存在的条目和新条目（译者注：即刚刚接收到的日志条目）发生了冲突,
 		// 那么就删除这个已经存在的条目以及它之后的所有条目
-		rf.Log = rf.Log[:args.PrevLogIndex-2]
+		if len(rf.Log) == 1 {
+			rf.Log = []LogEntry{}
+		} else {
+			rf.Log = rf.Log[:args.PrevLogIndex-1]
+		}
 	}
 	// 追加日志中尚未存在的任何新条目
 	rf.Log = append(rf.Log, args.Entries...)
@@ -342,7 +351,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	}
 	// fmt.Printf("[Debug] server%v是否承认:%v\n", server, reply.VoteGranted)
 	if reply.VoteGranted {
-		fmt.Printf("[Debug] 节点为%v承认%v\n", server, rf.me)
+		fmt.Printf("[Debug] 服务器节点%v承认%v\n", server, rf.me)
 		rf.VoteNums += 1
 	}
 	return ok
@@ -404,8 +413,8 @@ func (rf *Raft) getHeartBeatTime() time.Time {
 }
 
 func (rf *Raft) getelectionTimeout() time.Duration {
-	min := 500
-	max := 1000
+	min := 300
+	max := 2000
 	randTime := rand.Intn(max-min) + min
 	electionTimeout := time.Millisecond * time.Duration(randTime)
 	return electionTimeout
@@ -453,6 +462,7 @@ func (rf *Raft) election() {
 	rf.State = Candidates
 	// 为自己投一票
 	rf.VotedFor = rf.me
+	rf.VotedTerm = rf.CurrentTerm
 	// 并行地向除自己的服务器索要选票
 	// 如果没有收到选票，它会反复尝试，直到发生以下三种情况之一：
 	// 1. 获得超过半数的选票；成为 Leader，并向其他节点发送 AppendEntries 心跳;
@@ -462,7 +472,6 @@ func (rf *Raft) election() {
 	for {
 		// wg := new(sync.WaitGroup)
 		if !rf.killed() && rf.State == Candidates {
-			fmt.Printf("[Debug] 向%v节点发送请求\n", len(rf.peers)-1)
 			// wg.Add(len(rf.peers))
 			// 如果当前节点没有宕机并且仍为候选人时周期性地向所有节点发送投票请求
 			for i := 0; i < len(rf.peers); i++ {
@@ -482,7 +491,7 @@ func (rf *Raft) election() {
 					go rf.sendRequestVote(i, &req, &reply)
 				}
 			}
-			time.Sleep(time.Millisecond * 100)
+			// time.Sleep(time.Millisecond * 100)
 			// wg.Done()
 			if rf.VoteNums > len(rf.peers)/2 {
 				// 获得超过半数的选票，成为 Leader
@@ -494,7 +503,7 @@ func (rf *Raft) election() {
 			return
 		}
 		// 休息一段时间再向服务器节点发送投票请求
-		duration := time.Millisecond * 100
+		duration := time.Millisecond * 25
 		time.Sleep(duration)
 	}
 }
@@ -515,6 +524,7 @@ func (rf *Raft) ticker() {
 
 		// 如果超过选举超时时间没有接收到心跳包，则变成候选者发起选举
 		if duration > electionTimeout {
+			rf.VoteNums = 0
 			rf.election()
 		} else {
 			// 如果接到了心跳包则变成追随者
@@ -545,7 +555,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.State = Follwer
 	rf.CurrentTerm = 1
 	rf.VotedFor = -1
-
+	rf.VotedTerm = 0
 	// Your initialization code here (2A, 2B, 2C).
 
 	// initialize from state persisted before a crash
