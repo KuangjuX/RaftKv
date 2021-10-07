@@ -375,5 +375,10 @@ func (rf *Raft) ticker() {
 		}
 	}
 }
-```
-
+``` 
+   
+**通过的测试用例**
+- [x] TestInitialElection2
+- [ ] TestReElection2A
+- [ ] TestManyElections2A
+ 

@@ -243,9 +243,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// 如果term < currentTerm返回 false
 	if args.Term < rf.CurrentTerm {
 		fmt.Printf("[寻求选票] 候选人任期小于自己的任期.\n")
+		reply.Term = rf.CurrentTerm
 		reply.VoteGranted = false
 	}
-
+	rf.CurrentTerm = args.Term
 	// 如果 votedFor 为空或者为 candidateId，
 	// 并且候选人的日志至少和自己一样新，那么就投票给他
 	if rf.VotedFor == -1 {
@@ -331,15 +332,17 @@ func (rf *Raft) RequestAppendEntries(args *AppendEntries, reply *AppendEntriesRe
 // the struct itself.
 //
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
-	fmt.Printf("[Debug] 向服务器节点%v发送选举投票\n", server)
+	fmt.Printf("[Debug] 服务器%v向服务器节点%v发送选举投票\n", rf.me, server)
 	// defer wg.Done()
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	if rf.CurrentTerm < reply.Term {
 		rf.CurrentTerm = reply.Term
+		rf.State = Follwer
+		return false
 	}
-	fmt.Printf("[Debug] server%v是否承认:%v\n", server, reply.VoteGranted)
+	// fmt.Printf("[Debug] server%v是否承认:%v\n", server, reply.VoteGranted)
 	if reply.VoteGranted {
-		fmt.Printf("[Debug] 节点%v发送了承认选票\n", server)
+		fmt.Printf("[Debug] 节点为%v承认%v\n", server, rf.me)
 		rf.VoteNums += 1
 	}
 	return ok
@@ -485,7 +488,7 @@ func (rf *Raft) election() {
 				// 获得超过半数的选票，成为 Leader
 				fmt.Printf("[Debug] Server%v得到超过半数选票，成为Leader\n", rf.me)
 				rf.State = Leader
-				return
+				// return
 			}
 		} else {
 			return
