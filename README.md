@@ -370,7 +370,7 @@ func (rf *Raft) ticker() {
 			rf.election()
 		} else {
 			// 如果接到了心跳包则变成追随者
-			fmt.Printf("[Debug] %v is follower.\n", rf.me)
+			fmt.Printf("[Debug] Server%v为 Follower.\n", rf.me)
 			continue
 		}
 	}
@@ -379,6 +379,6 @@ func (rf *Raft) ticker() {
    
 **通过的测试用例**
 - [x] TestInitialElection2
-- [ ] TestReElection2A
+- [x] TestReElection2A
 - [ ] TestManyElections2A
  
