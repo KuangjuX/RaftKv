@@ -89,6 +89,7 @@ type Raft struct {
 	// 状态参数
 	// 服务器已知最新任期（在服务器首次启动的时候初始化为0，单调递增）
 	CurrentTerm int
+	TermLock    sync.Mutex
 	// 当前任期内收到选票的候选人id，如果没有投给人和候选者，则为空
 	VotedFor int
 	// 日志条目，每个条目包含了用于状态机的命令，以及领导者接收到该条目时的任期（第一个索引为1）
@@ -106,12 +107,15 @@ type Raft struct {
 	MatchIndex []int
 
 	// 记录此台服务器的状态
-	State int
+	State     int
+	StateLock sync.Mutex
 	// 记录此台服务器上次接收心跳检测的时间
-	HeartBeat time.Time
+	HeartBeatLock sync.Mutex
+	HeartBeat     time.Time
 
 	// 记录投票给这个服务器节点的数据
-	VoteNums int
+	VotedLock sync.Mutex
+	VoteNums  int
 	// 记录最新一次投票的任期
 	VotedTerm int
 }
@@ -143,12 +147,16 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
 
+	rf.TermLock.Lock()
 	term = rf.CurrentTerm
+	rf.TermLock.Unlock()
+	rf.StateLock.Lock()
 	if rf.State == Leader {
 		isleader = true
 	} else {
 		isleader = false
 	}
+	rf.StateLock.Unlock()
 	// Your code here (2A).
 	return term, isleader
 }
@@ -254,8 +262,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		reply.VoteGranted = false
 		return
 	} else {
+		rf.TermLock.Lock()
 		rf.CurrentTerm = args.Term
+		rf.TermLock.Unlock()
+		rf.StateLock.Lock()
 		rf.State = Follwer
+		rf.StateLock.Unlock()
 	}
 	// rf.CurrentTerm = args.Term
 	// 如果 votedFor 为空或者为 candidateId，
@@ -276,7 +288,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		fmt.Printf("[Debug] Server%v的日志应当至少和自己(Server%v)一样新.\n", args.CandidateId, rf.me)
 		fmt.Printf("[Debug] Server%v LastLogIndex: %v, LastLogTerm: %v\n", args.CandidateId, args.LastLogIndex, args.LastLogTerm)
 		fmt.Printf("[Debug] Server%v LastLogIndex: %v, LastLogTerm: %v\n", rf.me, len(rf.Log), rf.Log[len(rf.Log)-1].Term)
-
+		// rf.VotedFor = args.CandidateId
+		// rf.VotedTerm = args.Term
+		// reply.VoteGranted = true
 	} else {
 		fmt.Printf("[Debug] Server%v已经投过票了.\n", rf.me)
 	}
@@ -285,14 +299,18 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 // Leader 向 Follower 发送心跳包
 func (rf *Raft) RequestAppendEntries(args *AppendEntries, reply *AppendEntriesReply) {
 	fmt.Printf("[Debug] Server%v收到Leader%v发送来的心跳包\n", rf.me, args.LeaderID)
+	rf.TermLock.Lock()
 	if args.Term >= rf.CurrentTerm {
 		rf.CurrentTerm = args.Term
+		rf.TermLock.Unlock()
+		rf.StateLock.Lock()
 		rf.State = Follwer
-		// rf.VotedFor = -1
+		rf.StateLock.Unlock()
 	} else if args.Term < rf.CurrentTerm {
 		// 如果领导者的任期小于接收者的当前任期，返回假
 		reply.Success = false
 		reply.Term = rf.CurrentTerm
+		rf.TermLock.Unlock()
 		return
 	}
 	// if len(rf.Log) < args.PrevLogIndex {
@@ -324,9 +342,13 @@ func (rf *Raft) RequestAppendEntries(args *AppendEntries, reply *AppendEntriesRe
 			rf.CommitIndex = len(rf.Log)
 		}
 	}
+	rf.HeartBeatLock.Lock()
 	rf.HeartBeat = time.Now()
+	rf.HeartBeatLock.Unlock()
 	reply.Success = true
+	rf.TermLock.Lock()
 	reply.Term = rf.CurrentTerm
+	rf.TermLock.Unlock()
 }
 
 //
@@ -380,7 +402,9 @@ func (rf *Raft) sendRequestVote(server int) bool {
 	// fmt.Printf("[Debug] server%v是否承认:%v\n", server, reply.VoteGranted)
 	if reply.VoteGranted {
 		fmt.Printf("[Debug] Server%v承认%v\n", server, rf.me)
+		rf.VotedLock.Lock()
 		rf.VoteNums += 1
+		rf.VotedLock.Unlock()
 	}
 	return ok
 }
@@ -389,7 +413,9 @@ func (rf *Raft) sendAppendEntries(server int) bool {
 	args := &AppendEntries{}
 	reply := &AppendEntriesReply{}
 	// 设置 Leader 的任期和ID
+	rf.TermLock.Lock()
 	args.Term = rf.CurrentTerm
+	rf.TermLock.Unlock()
 	args.LeaderID = rf.me
 	// if len(rf.Log) == 0 {
 	// 	args.PrevLogIndex = 0
@@ -408,12 +434,17 @@ func (rf *Raft) sendAppendEntries(server int) bool {
 	// args.Entries = entry
 	// args.LeaderCommit = rf.CommitIndex
 	ok := rf.peers[server].Call("Raft.RequestAppendEntries", args, reply)
+	rf.TermLock.Lock()
 	if reply.Term > rf.CurrentTerm {
+		rf.TermLock.Unlock()
 		fmt.Printf("[Debug] Leader%v变成Follower\n", rf.me)
+		rf.TermLock.Lock()
 		rf.CurrentTerm = reply.Term
+		rf.TermLock.Unlock()
 		rf.State = Follwer
 		return false
 	}
+	rf.TermLock.Unlock()
 	return ok
 }
 
@@ -464,12 +495,14 @@ func (rf *Raft) killed() bool {
 
 // 获取最近一次收到心跳包的时间
 func (rf *Raft) getHeartBeatTime() time.Time {
+	defer rf.HeartBeatLock.Unlock()
+	rf.HeartBeatLock.Lock()
 	return rf.HeartBeat
 }
 
 func (rf *Raft) getelectionTimeout() time.Duration {
-	min := 300
-	max := 500
+	min := 1000
+	max := 2000
 	randTime := rand.Intn(max-min) + min
 	electionTimeout := time.Millisecond * time.Duration(randTime)
 	return electionTimeout
@@ -478,13 +511,17 @@ func (rf *Raft) getelectionTimeout() time.Duration {
 // Leader 需要向 flowers 周期性地发送心跳包
 func (rf *Raft) sendHeartBeats() {
 	for {
+		rf.StateLock.Lock()
 		if !rf.killed() && rf.State == Leader {
+			rf.StateLock.Unlock()
 			// 如果节点的状态为领导者并且节点没有宕机，则周期性地向每个节点发送心跳包
 			for index := 0; index < len(rf.peers); index++ {
 				go rf.sendAppendEntries(index)
 			}
+		} else {
+			rf.StateLock.Unlock()
 		}
-		duration := time.Millisecond * 100
+		duration := time.Millisecond * 10
 		time.Sleep(duration)
 	}
 }
@@ -492,7 +529,9 @@ func (rf *Raft) sendHeartBeats() {
 // 候选人发起选举
 func (rf *Raft) election() {
 	// 发起选举，首先增加自己的任期
+	rf.TermLock.Lock()
 	rf.CurrentTerm += 1
+	rf.TermLock.Unlock()
 	// 转变为候选人状态
 	rf.State = Candidates
 	// 为自己投一票
@@ -516,14 +555,19 @@ func (rf *Raft) election() {
 					go rf.sendRequestVote(i)
 				}
 			}
-			// time.Sleep(time.Millisecond * 100)
+			time.Sleep(time.Millisecond * 10)
 			// wg.Done()
+			rf.VotedLock.Lock()
 			if rf.VoteNums > len(rf.peers)/2 {
+				rf.VotedLock.Unlock()
 				// 获得超过半数的选票，成为 Leader
+				rf.StateLock.Lock()
 				rf.State = Leader
+				rf.StateLock.Unlock()
 				fmt.Printf("[Debug] Server%v得到超过半数选票，成为Leader\n", rf.me)
 				return
 			}
+			rf.VotedLock.Unlock()
 		} else {
 			return
 		}
@@ -535,7 +579,7 @@ func (rf *Raft) election() {
 
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
-func (rf *Raft) ticker(ch *chan bool) {
+func (rf *Raft) ticker() {
 	for !rf.killed() {
 
 		// Your code here to check if a leader election should
@@ -549,12 +593,18 @@ func (rf *Raft) ticker(ch *chan bool) {
 
 		// 如果超过选举超时时间没有接收到心跳包，则变成候选者发起选举
 		if duration > electionTimeout {
+			fmt.Printf("[Debug] Server%v选举超时\n", rf.me)
+			fmt.Printf("[Debug] electionTimeout: %v duration: %v\n", electionTimeout, duration)
 			rf.VoteNums = 0
 			rf.election()
-		} else {
+		} else if rf.State != Leader {
 			// 如果接到了心跳包则变成追随者
-			fmt.Printf("[Debug] Server%v为 Follower.\n", rf.me)
+			// rf.State = Follwer
+			fmt.Printf("[Debug] Server%v为Follower.\n", rf.me)
 			continue
+		} else {
+			// rf.State = Leader
+			fmt.Printf("[Debug] Server%v仍为Leader.\n", rf.me)
 		}
 	}
 }
@@ -594,8 +644,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.readPersist(persister.ReadRaftState())
 
 	// start ticker goroutine to start elections
-	ch := make(chan bool)
-	go rf.ticker(&ch)
+	// ch := make(chan bool)
+	go rf.ticker()
 
 	// 每个结点应当检查自己的状态，
 	// 如果是 leader 的话，就向其他节点发送心跳包

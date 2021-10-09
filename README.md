@@ -368,7 +368,7 @@ func (rf *Raft) ticker() {
 		// 如果超过选举超时时间没有接收到心跳包，则变成候选者发起选举
 		if duration > electionTimeOut {
 			rf.election()
-		} else {
+		} else if {
 			// 如果接到了心跳包则变成追随者
 			fmt.Printf("[Debug] Server%v为 Follower.\n", rf.me)
 			continue
