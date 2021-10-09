@@ -31,7 +31,7 @@ import (
 )
 
 const (
-	Follwer    = 0
+	Follower   = 0
 	Candidates = 1
 	Leader     = 2
 )
@@ -146,14 +146,24 @@ func (rf *Raft) GetState() (int, bool) {
 
 	var term int
 	var isleader bool
+	switch rf.State {
+	case Leader:
+		fmt.Printf("[GetState] Server%v is Leader.\n", rf.me)
+	case Candidates:
+		fmt.Printf("[GetState] Server%v is Candidate.\n", rf.me)
+	case Follower:
+		fmt.Printf("[GetState] Server%v is Follower.\n", rf.me)
+	}
 
 	rf.TermLock.Lock()
 	term = rf.CurrentTerm
 	rf.TermLock.Unlock()
 	rf.StateLock.Lock()
 	if rf.State == Leader {
+		// fmt.Printf("[Debug] Server%v是Leader\n", rf.me)
 		isleader = true
 	} else {
+		// fmt.Printf("[Debug] Server%v是 %v\n", rf.me, rf.State)
 		isleader = false
 	}
 	rf.StateLock.Unlock()
@@ -266,7 +276,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.CurrentTerm = args.Term
 		rf.TermLock.Unlock()
 		rf.StateLock.Lock()
-		rf.State = Follwer
+		rf.State = Follower
 		rf.StateLock.Unlock()
 	}
 	// rf.CurrentTerm = args.Term
@@ -300,11 +310,11 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 func (rf *Raft) RequestAppendEntries(args *AppendEntries, reply *AppendEntriesReply) {
 	fmt.Printf("[Debug] Server%v收到Leader%v发送来的心跳包\n", rf.me, args.LeaderID)
 	rf.TermLock.Lock()
-	if args.Term >= rf.CurrentTerm {
+	if args.Term >= rf.CurrentTerm && rf.me != args.LeaderID {
 		rf.CurrentTerm = args.Term
 		rf.TermLock.Unlock()
 		rf.StateLock.Lock()
-		rf.State = Follwer
+		rf.State = Follower
 		rf.StateLock.Unlock()
 	} else if args.Term < rf.CurrentTerm {
 		// 如果领导者的任期小于接收者的当前任期，返回假
@@ -441,7 +451,7 @@ func (rf *Raft) sendAppendEntries(server int) bool {
 		rf.TermLock.Lock()
 		rf.CurrentTerm = reply.Term
 		rf.TermLock.Unlock()
-		rf.State = Follwer
+		rf.State = Follower
 		return false
 	}
 	rf.TermLock.Unlock()
@@ -501,8 +511,8 @@ func (rf *Raft) getHeartBeatTime() time.Time {
 }
 
 func (rf *Raft) getelectionTimeout() time.Duration {
-	min := 1000
-	max := 2000
+	min := 300
+	max := 500
 	randTime := rand.Intn(max-min) + min
 	electionTimeout := time.Millisecond * time.Duration(randTime)
 	return electionTimeout
@@ -627,7 +637,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 
-	rf.State = Follwer
+	rf.State = Follower
 	rf.CurrentTerm = 0
 	rf.VotedFor = -1
 	rf.VotedTerm = 0

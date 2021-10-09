@@ -381,8 +381,8 @@ func (cfg *config) checkOneLeader() int {
 		leaders := make(map[int][]int)
 		for i := 0; i < cfg.n; i++ {
 			if cfg.connected[i] {
-				_, is_leader := cfg.rafts[i].GetState()
-				fmt.Printf("[Debug] Server%v is leader? %v\n", i, is_leader)
+				// _, is_leader := cfg.rafts[i].GetState()
+				// fmt.Printf("[Debug] Server%v is leader? %v\n", i, is_leader)
 				if term, leader := cfg.rafts[i].GetState(); leader {
 					leaders[term] = append(leaders[term], i)
 				}
