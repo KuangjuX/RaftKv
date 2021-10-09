@@ -155,10 +155,10 @@ func (rf *Raft) GetState() (int, bool) {
 		fmt.Printf("[GetState] Server%v is Follower.\n", rf.me)
 	}
 
-	rf.TermLock.Lock()
+	// rf.TermLock.Lock()
 	term = rf.CurrentTerm
-	rf.TermLock.Unlock()
-	rf.StateLock.Lock()
+	// rf.TermLock.Unlock()
+	// rf.StateLock.Lock()
 	if rf.State == Leader {
 		// fmt.Printf("[Debug] Server%v是Leader\n", rf.me)
 		isleader = true
@@ -166,7 +166,7 @@ func (rf *Raft) GetState() (int, bool) {
 		// fmt.Printf("[Debug] Server%v是 %v\n", rf.me, rf.State)
 		isleader = false
 	}
-	rf.StateLock.Unlock()
+	// rf.StateLock.Unlock()
 	// Your code here (2A).
 	return term, isleader
 }
@@ -264,63 +264,68 @@ type RequestVoteReply struct {
 //
 // 候选人向其他节点寻求选票
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
+	// fmt.Printf("[Debug] Test.\n")
 	// Your code here (2A, 2B).
 	// 如果term < currentTerm返回 false
 	if args.Term < rf.CurrentTerm {
-		fmt.Printf("[寻求选票] 候选人任期小于自己的任期.\n")
+		fmt.Printf("[RequestVote] 候选人任期小于自己的任期.\n")
 		reply.Term = rf.CurrentTerm
 		reply.VoteGranted = false
 		return
 	} else {
-		rf.TermLock.Lock()
+		// rf.TermLock.Lock()
 		rf.CurrentTerm = args.Term
-		rf.TermLock.Unlock()
-		rf.StateLock.Lock()
+		// rf.TermLock.Unlock()
+		// rf.StateLock.Lock()
 		rf.State = Follower
-		rf.StateLock.Unlock()
+		// rf.StateLock.Unlock()
 	}
 	// rf.CurrentTerm = args.Term
 	// 如果 votedFor 为空或者为 candidateId，
 	// 并且候选人的日志至少和自己一样新，那么就投票给他
 	// fmt.Printf("[Debug] 节点%v的VotedTerm为%v,VotedFor为%v,请求Server%v,任期为%v\n", rf.me, rf.VotedTerm, rf.VotedFor, args.CandidateId, args.Term)
 	if (rf.VotedTerm == args.Term && rf.VotedTerm == -1) || rf.VotedTerm < args.Term {
-		if len(rf.Log) == 0 {
-			reply.VoteGranted = true
-			rf.VotedFor = args.CandidateId
-			rf.VotedTerm = args.Term
-			return
-		} else if args.LastLogIndex >= len(rf.Log) && args.LastLogTerm >= rf.Log[len(rf.Log)-1].Term {
-			reply.VoteGranted = true
-			rf.VotedFor = args.CandidateId
-			rf.VotedTerm = args.Term
-			return
-		}
-		fmt.Printf("[Debug] Server%v的日志应当至少和自己(Server%v)一样新.\n", args.CandidateId, rf.me)
-		fmt.Printf("[Debug] Server%v LastLogIndex: %v, LastLogTerm: %v\n", args.CandidateId, args.LastLogIndex, args.LastLogTerm)
-		fmt.Printf("[Debug] Server%v LastLogIndex: %v, LastLogTerm: %v\n", rf.me, len(rf.Log), rf.Log[len(rf.Log)-1].Term)
-		// rf.VotedFor = args.CandidateId
-		// rf.VotedTerm = args.Term
-		// reply.VoteGranted = true
+		// if len(rf.Log) == 0 {
+		// 	reply.VoteGranted = true
+		// 	rf.VotedFor = args.CandidateId
+		// 	rf.VotedTerm = args.Term
+		// 	return
+		// } else if args.LastLogIndex >= len(rf.Log) && args.LastLogTerm >= rf.Log[len(rf.Log)-1].Term {
+		// 	reply.VoteGranted = true
+		// 	rf.VotedFor = args.CandidateId
+		// 	rf.VotedTerm = args.Term
+		// 	return
+		// }
+		// fmt.Printf("[Debug] Server%v的日志应当至少和自己(Server%v)一样新.\n", args.CandidateId, rf.me)
+		// fmt.Printf("[Debug] Server%v LastLogIndex: %v, LastLogTerm: %v\n", args.CandidateId, args.LastLogIndex, args.LastLogTerm)
+		// fmt.Printf("[Debug] Server%v LastLogIndex: %v, LastLogTerm: %v\n", rf.me, len(rf.Log), rf.Log[len(rf.Log)-1].Term)
+		fmt.Printf("[RequestVote] Server%v为候选人%v投票.\n", rf.me, args.CandidateId)
+		rf.VotedFor = args.CandidateId
+		rf.VotedTerm = args.Term
+		reply.VoteGranted = true
+		return
 	} else {
-		fmt.Printf("[Debug] Server%v已经投过票了.\n", rf.me)
+		fmt.Printf("[RequestVote] Server%v已经投过票了.\n", rf.me)
+		return
 	}
+
 }
 
 // Leader 向 Follower 发送心跳包
 func (rf *Raft) RequestAppendEntries(args *AppendEntries, reply *AppendEntriesReply) {
 	fmt.Printf("[Debug] Server%v收到Leader%v发送来的心跳包\n", rf.me, args.LeaderID)
-	rf.TermLock.Lock()
+	// rf.TermLock.Lock()
 	if args.Term >= rf.CurrentTerm && rf.me != args.LeaderID {
 		rf.CurrentTerm = args.Term
-		rf.TermLock.Unlock()
-		rf.StateLock.Lock()
+		// rf.TermLock.Unlock()
+		// rf.StateLock.Lock()
 		rf.State = Follower
-		rf.StateLock.Unlock()
+		// rf.StateLock.Unlock()
 	} else if args.Term < rf.CurrentTerm {
 		// 如果领导者的任期小于接收者的当前任期，返回假
 		reply.Success = false
 		reply.Term = rf.CurrentTerm
-		rf.TermLock.Unlock()
+		// rf.TermLock.Unlock()
 		return
 	}
 	// if len(rf.Log) < args.PrevLogIndex {
@@ -352,13 +357,13 @@ func (rf *Raft) RequestAppendEntries(args *AppendEntries, reply *AppendEntriesRe
 			rf.CommitIndex = len(rf.Log)
 		}
 	}
-	rf.HeartBeatLock.Lock()
+	// rf.HeartBeatLock.Lock()
 	rf.HeartBeat = time.Now()
-	rf.HeartBeatLock.Unlock()
+	// rf.HeartBeatLock.Unlock()
 	reply.Success = true
-	rf.TermLock.Lock()
+	// rf.TermLock.Lock()
 	reply.Term = rf.CurrentTerm
-	rf.TermLock.Unlock()
+	// rf.TermLock.Unlock()
 }
 
 //
@@ -390,28 +395,29 @@ func (rf *Raft) RequestAppendEntries(args *AppendEntries, reply *AppendEntriesRe
 // that the caller passes the address of the reply struct with &, not
 // the struct itself.
 //
-func (rf *Raft) sendRequestVote(server int) bool {
-	fmt.Printf("[Debug] Server%v向Server%v发送选举投票\n", rf.me, server)
+func (rf *Raft) sendRequestVote(server int, wg *sync.WaitGroup) bool {
+	defer wg.Done()
+	fmt.Printf("[sendRequestVote] Server%v向Server%v发送选举投票\n", rf.me, server)
 	req := RequestVoteArgs{}
 	reply := RequestVoteReply{}
 	// 初始化请求的参数
 	req.Term = rf.CurrentTerm
 	req.CandidateId = rf.me
-	req.LastLogIndex = len(rf.Log)
-	if len(rf.Log) == 0 {
-		req.LastLogTerm = 0
-	} else {
-		req.LastLogTerm = rf.Log[len(rf.Log)-1].Term
-	}
+	// req.LastLogIndex = len(rf.Log)
+	// if len(rf.Log) == 0 {
+	// 	req.LastLogTerm = 0
+	// } else {
+	// 	req.LastLogTerm = rf.Log[len(rf.Log)-1].Term
+	// }
 	ok := rf.peers[server].Call("Raft.RequestVote", &req, &reply)
 	// if rf.CurrentTerm < reply.Term {
 	// 	rf.CurrentTerm = reply.Term
 	// 	rf.State = Follwer
 	// 	return false
 	// }
-	// fmt.Printf("[Debug] server%v是否承认:%v\n", server, reply.VoteGranted)
+	// fmt.Printf("[sendRequestVote] server%v是否承认:%v\n", server, reply.VoteGranted)
 	if reply.VoteGranted {
-		fmt.Printf("[Debug] Server%v承认%v\n", server, rf.me)
+		fmt.Printf("[sendRequestVote] Server%v承认%v\n", server, rf.me)
 		rf.VotedLock.Lock()
 		rf.VoteNums += 1
 		rf.VotedLock.Unlock()
@@ -419,13 +425,12 @@ func (rf *Raft) sendRequestVote(server int) bool {
 	return ok
 }
 
-func (rf *Raft) sendAppendEntries(server int) bool {
+func (rf *Raft) sendAppendEntries(server int, wg *sync.WaitGroup) bool {
+	defer wg.Done()
 	args := &AppendEntries{}
 	reply := &AppendEntriesReply{}
 	// 设置 Leader 的任期和ID
-	rf.TermLock.Lock()
 	args.Term = rf.CurrentTerm
-	rf.TermLock.Unlock()
 	args.LeaderID = rf.me
 	// if len(rf.Log) == 0 {
 	// 	args.PrevLogIndex = 0
@@ -444,17 +449,12 @@ func (rf *Raft) sendAppendEntries(server int) bool {
 	// args.Entries = entry
 	// args.LeaderCommit = rf.CommitIndex
 	ok := rf.peers[server].Call("Raft.RequestAppendEntries", args, reply)
-	rf.TermLock.Lock()
 	if reply.Term > rf.CurrentTerm {
-		rf.TermLock.Unlock()
 		fmt.Printf("[Debug] Leader%v变成Follower\n", rf.me)
-		rf.TermLock.Lock()
 		rf.CurrentTerm = reply.Term
-		rf.TermLock.Unlock()
 		rf.State = Follower
 		return false
 	}
-	rf.TermLock.Unlock()
 	return ok
 }
 
@@ -505,14 +505,14 @@ func (rf *Raft) killed() bool {
 
 // 获取最近一次收到心跳包的时间
 func (rf *Raft) getHeartBeatTime() time.Time {
-	defer rf.HeartBeatLock.Unlock()
-	rf.HeartBeatLock.Lock()
+	// defer rf.HeartBeatLock.Unlock()
+	// rf.HeartBeatLock.Lock()
 	return rf.HeartBeat
 }
 
 func (rf *Raft) getelectionTimeout() time.Duration {
-	min := 300
-	max := 500
+	min := 1000
+	max := 2000
 	randTime := rand.Intn(max-min) + min
 	electionTimeout := time.Millisecond * time.Duration(randTime)
 	return electionTimeout
@@ -521,29 +521,37 @@ func (rf *Raft) getelectionTimeout() time.Duration {
 // Leader 需要向 flowers 周期性地发送心跳包
 func (rf *Raft) sendHeartBeats() {
 	for {
-		rf.StateLock.Lock()
+		// rf.StateLock.Lock()
 		if !rf.killed() && rf.State == Leader {
-			rf.StateLock.Unlock()
+			wg := new(sync.WaitGroup)
+			// rf.StateLock.Unlock()
 			// 如果节点的状态为领导者并且节点没有宕机，则周期性地向每个节点发送心跳包
 			for index := 0; index < len(rf.peers); index++ {
-				go rf.sendAppendEntries(index)
+				wg.Add(1)
+				go rf.sendAppendEntries(index, wg)
 			}
+			fmt.Printf("[sendHeartBeats] 等待.\n")
+			wg.Wait()
 		} else {
-			rf.StateLock.Unlock()
+			// rf.StateLock.Unlock()
 		}
-		duration := time.Millisecond * 10
-		time.Sleep(duration)
+		// duration := time.Millisecond * 10
+		// time.Sleep(duration)
 	}
 }
 
 // 候选人发起选举
 func (rf *Raft) election() {
 	// 发起选举，首先增加自己的任期
-	rf.TermLock.Lock()
+	fmt.Printf("[election] 开始选举.\n")
+	// rf.TermLock.Lock()
 	rf.CurrentTerm += 1
-	rf.TermLock.Unlock()
+	// rf.TermLock.Unlock()
+	fmt.Printf("[election] 更新任期.\n")
 	// 转变为候选人状态
+	// rf.StateLock.Lock()
 	rf.State = Candidates
+	// rf.StateLock.Unlock()
 	// 为自己投一票
 	rf.VotedFor = rf.me
 	rf.VotedTerm = rf.CurrentTerm
@@ -555,29 +563,29 @@ func (rf *Raft) election() {
 	// 3. 其他两种情况都没发生，没人能够获胜（electionTimeout 已过）：增加 currentTerm,
 	// 开始新一轮选举
 	for {
-		// wg := new(sync.WaitGroup)
 		if !rf.killed() {
+			wg := new(sync.WaitGroup)
 			// wg.Add(len(rf.peers))
 			// 如果当前节点没有宕机并且仍为候选人时周期性地向所有节点发送投票请求
 			for i := 0; i < len(rf.peers); i++ {
 				if i != rf.me {
-					// wg.Add(1)
-					go rf.sendRequestVote(i)
+					wg.Add(1)
+					go rf.sendRequestVote(i, wg)
 				}
 			}
-			time.Sleep(time.Millisecond * 10)
-			// wg.Done()
-			rf.VotedLock.Lock()
+			fmt.Printf("[election] 等待.\n")
+			wg.Wait()
+			// rf.VotedLock.Lock()
 			if rf.VoteNums > len(rf.peers)/2 {
-				rf.VotedLock.Unlock()
+				// rf.VotedLock.Unlock()
 				// 获得超过半数的选票，成为 Leader
-				rf.StateLock.Lock()
+				// rf.StateLock.Lock()
 				rf.State = Leader
-				rf.StateLock.Unlock()
+				// rf.StateLock.Unlock()
 				fmt.Printf("[Debug] Server%v得到超过半数选票，成为Leader\n", rf.me)
 				return
 			}
-			rf.VotedLock.Unlock()
+			// rf.VotedLock.Unlock()
 		} else {
 			return
 		}
