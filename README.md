@@ -333,7 +333,7 @@ type Raft struct {
 	// 状态参数
 	// 服务器已知最新任期（在服务器首次启动的时候初始化为0，单调递增）
 	CurrentTerm int
-	// 当前任期内收到选票的候选人id，如果没有头给人和候选者，则为空
+	// 当前任期内收到选票的候选人id，如果没有投给人和候选者，则为空
 	VotedFor int
 	// 日志条目，每个条目包含了用于状态机的命令，以及领导者接收到该条目时的任期（第一个索引为1）
 	Log []LogEntry
@@ -348,11 +348,18 @@ type Raft struct {
 	NextIndex []int
 	// 对于每一台服务器，已知的已经复制到该服务器的最高日志条目的索引（初始值为0，单调递增）
 	MatchIndex []int
+
+	// 记录此台服务器的状态
+	State int
+	// 记录此台服务器上次接收心跳检测的时间
+	HeartBeat time.Time
 }
 ``` 
 
 `ticker` 的实现如下所示:
 ```golang
+// The ticker go routine starts a new election if this peer hasn't received
+// heartsbeats recently.
 func (rf *Raft) ticker() {
 	for !rf.killed() {
 
@@ -360,22 +367,197 @@ func (rf *Raft) ticker() {
 		// be started and to randomize sleeping time using
 		// time.Sleep().
 
-		electionTimeOut := rf.getelectionTimeout()
-		time.Sleep(electionTimeOut)
+		electionTimeout := rf.getelectionTimeout()
+		time.Sleep(electionTimeout)
 
 		duration := time.Since(rf.getHeartBeatTime())
 
 		// 如果超过选举超时时间没有接收到心跳包，则变成候选者发起选举
-		if duration > electionTimeOut {
+		if duration > electionTimeout {
+			DPrintf("[Debug] Server%v选举超时\n", rf.me)
+			DPrintf("[Debug] electionTimeout: %v duration: %v\n", electionTimeout, duration)
 			rf.election()
-		} else if {
+		} else if rf.State != Leader {
 			// 如果接到了心跳包则变成追随者
-			fmt.Printf("[Debug] Server%v为 Follower.\n", rf.me)
+			DPrintf("[Debug] Server%v为Follower.\n", rf.me)
 			continue
+		} else {
+			DPrintf("[Debug] Server%v仍为Leader.\n", rf.me)
 		}
 	}
 }
+```   
+`ticker()` 首先获取随机的选举超时时间，随后进入休眠，当选举超时时获取最近的一次获取心跳检测的时间，并来判断在选举超时时间内有没有接收到心跳包，若没有则转换为候选人并开始一次选举`election()`:
+```golang
+// 候选人发起选举
+func (rf *Raft) election() {
+	// 发起选举，首先增加自己的任期
+	DPrintf("[election] 开始选举.\n")
+	DPrintf("[election] 更新任期.\n")
+	rf.ConvertTo(Candidates)
+	// rf.CurrentTerm += 1
+	// 并行地向除自己的服务器索要选票
+	// 如果没有收到选票，它会反复尝试，直到发生以下三种情况之一：
+	// 1. 获得超过半数的选票；成为 Leader，并向其他节点发送 AppendEntries 心跳;
+	// 2. 收到来自 Leader 的 RPC， 转为 Follwer
+	// 3. 其他两种情况都没发生，没人能够获胜（electionTimeout 已过）：增加 currentTerm,
+	// 开始新一轮选举
+	for {
+		if !rf.killed() {
+			wg := new(sync.WaitGroup)
+			// wg.Add(len(rf.peers))
+			// 如果当前节点没有宕机并且仍为候选人时周期性地向所有节点发送投票请求
+			nVote := 1
+			for i := 0; i < len(rf.peers); i++ {
+				if i != rf.me {
+					wg.Add(1)
+					go func(server int) {
+						rf.mu.Lock()
+						req := RequestVoteArgs{}
+						reply := RequestVoteReply{}
+						// 初始化请求的参数
+						req.Term = rf.CurrentTerm
+						req.CandidateId = rf.me
+						rf.mu.Unlock()
+						if rf.sendRequestVote(server, wg, &req, &reply) {
+							rf.mu.Lock()
+							defer rf.mu.Unlock()
+							if rf.CurrentTerm != req.Term {
+								return
+							}
+							if reply.Term > rf.CurrentTerm {
+								rf.CurrentTerm = reply.Term
+								rf.ConvertTo(Follower)
+							}
+							if reply.VoteGranted {
+								DPrintf("[sendRequestVote] Server%v承认%v\n", server, rf.me)
+								nVote += 1
+								if nVote > len(rf.peers)/2 && rf.State == Candidates {
+									// 获得超过半数的选票，成为 Leader
+									rf.ConvertTo(Leader)
+									DPrintf("[Debug] Server%v得到超过半数选票，成为Leader\n", rf.me)
+									return
+								}
+							}
+						} else {
+							if rf.CurrentTerm < reply.Term {
+								rf.ConvertTo(Follower)
+								rf.CurrentTerm = reply.Term
+							}
+						}
+
+					}(i)
+				}
+			}
+			wg.Wait()
+		} else {
+			return
+		}
+		// 休息一段时间再向服务器节点发送投票请求
+		duration := time.Millisecond * 100
+		time.Sleep(duration)
+	}
+}
 ``` 
+
+在 `election()` 函数中，他会周期性地并发地向所有节点发送选举请求，只有当以下情况发生时结束选举：
+- 获得超过半数选票，成为 Leader
+- 收到其他 Leader 发来的心跳检测包，成为 Follower
+- 该任期内没有节点成为 Leader，选举超时进入下一个任期
+  
+其中，接收到选票的节点需要根据选票的信息来为候选人投票，只有候选人的任期大于自己的任期并且当前节点没有为任何节点投票或者为该节点投过票时才为其投票:
+```golang
+func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	// 如果term < currentTerm返回 false
+	if args.Term > rf.CurrentTerm {
+		rf.ConvertTo(Follower)
+		rf.CurrentTerm = args.Term
+	}
+	if (args.Term < rf.CurrentTerm) || (rf.VotedFor != -1 && rf.VotedFor != args.CandidateId) {
+		reply.Term = rf.CurrentTerm
+		reply.VoteGranted = false
+		return
+	}
+	// 如果 votedFor 为空或者为 candidateId，
+	// 并且候选人的日志至少和自己一样新，那么就投票给他
+	if rf.VotedFor == -1 || rf.VotedFor == args.CandidateId {
+		DPrintf("[RequestVote] Server%v为候选人%v投票.\n", rf.me, args.CandidateId)
+		// 此时要重新设置选举，即模拟心跳包
+		rf.HeartBeat = time.Now()
+		rf.VotedFor = args.CandidateId
+		reply.VoteGranted = true
+		reply.Term = rf.CurrentTerm
+	}
+
+}
+```
+  
+当候选人选举成功成为 `Leader` 的时候，他会周期性地向所有节点（包括自己）发送心跳检测包来维护自己的权威，发送心跳检测的方法定义如下:
+```golang
+// Leader 需要向 flowers 周期性地发送心跳包
+func (rf *Raft) sendHeartBeats() {
+	for {
+		if !rf.killed() && rf.State == Leader {
+			wg := new(sync.WaitGroup)
+			// 如果节点的状态为领导者并且节点没有宕机，则周期性地向每个节点发送心跳包
+			for index := 0; index < len(rf.peers); index++ {
+				wg.Add(1)
+				go rf.sendAppendEntries(index, wg)
+			}
+			DPrintf("[sendHeartBeats] 等待.\n")
+			wg.Wait()
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+}
+```
+同时，当节点接收到心跳检测包的时候也需要根据自己的状态返回响应并更新自己接收到心跳的时间:
+```golang
+// Leader 向 Follower 发送心跳包
+func (rf *Raft) RequestAppendEntries(args *AppendEntries, reply *AppendEntriesReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	DPrintf("[Debug] Server%v收到Leader%v发送来的心跳包\n", rf.me, args.LeaderID)
+	if args.Term < rf.CurrentTerm {
+		// 如果领导者的任期小于接收者的当前任期，返回假
+		reply.Success = false
+		reply.Term = rf.CurrentTerm
+		return
+	}
+	rf.HeartBeat = time.Now()
+	if args.Term > rf.CurrentTerm || rf.State != Follower {
+		rf.ConvertTo(Follower)
+		rf.CurrentTerm = args.Term
+	}
+	reply.Success = true
+	reply.Term = rf.CurrentTerm
+}
+```
+同时，若 Leader 发现自己的任期小于相应的任期将会立即变成 Follower 等待选举超时。  
+   
+我们定义了 `ConvertTo()` 函数来封装每次状态转换的细节:
+
+```golang
+func (rf *Raft) ConvertTo(state int) {
+	switch state {
+	case Follower:
+		rf.State = Follower
+		rf.VotedFor = -1
+	case Candidates:
+		rf.State = Candidates
+		rf.CurrentTerm += 1
+		rf.VotedFor = rf.me
+	case Leader:
+		rf.State = Leader
+		rf.HeartBeat = time.Now()
+	}
+}
+```
+其中，Follower 需要清空自己的 `VotedFor` 为了准备下一个任期的选举投票，同时 Leader 也需要更新自己的心跳检测避免再次选举超时  
+  
+尽管我们最终写出了一个可运行的领导选举过程，但是在最终的测试时仍然不稳定，经常会有失败的情况。并且我也不知道怎么解决（感觉都是照着论文实现的），而且感觉失败的时候都是感觉测试的时候再给一点时间就会 success(不知道是不是我的错觉)，在之后我会继续优化这个过程达到更稳定的效果。
    
 **通过的测试用例**
 - [x] TestInitialElection2

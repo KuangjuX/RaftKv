@@ -18,15 +18,11 @@ package raft
 //
 
 import (
-	//	"bytes"
-	// "crypto/rand"
-
 	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	//	"6.824/labgob"
 	"6.824/labrpc"
 )
 
@@ -109,8 +105,6 @@ type Raft struct {
 	State int
 	// 记录此台服务器上次接收心跳检测的时间
 	HeartBeat time.Time
-
-	timeoutHeartBeat time.Duration
 }
 
 type AppendEntries struct {
@@ -267,11 +261,11 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// 并且候选人的日志至少和自己一样新，那么就投票给他
 	if rf.VotedFor == -1 || rf.VotedFor == args.CandidateId {
 		DPrintf("[RequestVote] Server%v为候选人%v投票.\n", rf.me, args.CandidateId)
+		// 此时要重新设置选举，即模拟心跳包
+		rf.HeartBeat = time.Now()
 		rf.VotedFor = args.CandidateId
 		reply.VoteGranted = true
 		reply.Term = rf.CurrentTerm
-		// 此时要重新设置选举，即模拟心跳包
-		rf.HeartBeat = time.Now()
 	}
 
 }
@@ -403,7 +397,7 @@ func (rf *Raft) getHeartBeatTime() time.Time {
 
 func (rf *Raft) getelectionTimeout() time.Duration {
 	rand.Seed(time.Now().UnixNano())
-	electionTimeout := 500*time.Millisecond + time.Duration(rand.Int63n(150)*time.Hour.Milliseconds())
+	electionTimeout := 1000*time.Millisecond + time.Duration(rand.Int63n(1000))*time.Millisecond
 	return electionTimeout
 }
 
@@ -428,9 +422,9 @@ func (rf *Raft) sendHeartBeats() {
 func (rf *Raft) election() {
 	// 发起选举，首先增加自己的任期
 	DPrintf("[election] 开始选举.\n")
-	rf.CurrentTerm += 1
 	DPrintf("[election] 更新任期.\n")
 	rf.ConvertTo(Candidates)
+	// rf.CurrentTerm += 1
 	// 并行地向除自己的服务器索要选票
 	// 如果没有收到选票，它会反复尝试，直到发生以下三种情况之一：
 	// 1. 获得超过半数的选票；成为 Leader，并向其他节点发送 AppendEntries 心跳;
