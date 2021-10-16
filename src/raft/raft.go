@@ -20,7 +20,7 @@ package raft
 import (
 	//	"bytes"
 	// "crypto/rand"
-	"fmt"
+
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -110,10 +110,7 @@ type Raft struct {
 	// 记录此台服务器上次接收心跳检测的时间
 	HeartBeat time.Time
 
-	// 记录投票给这个服务器节点的数据
-	// VoteNums int
-	// 记录最新一次投票的任期
-	// VotedTerm int
+	timeoutHeartBeat time.Duration
 }
 
 type AppendEntries struct {
@@ -144,11 +141,11 @@ func (rf *Raft) GetState() (int, bool) {
 	var isleader bool
 	switch rf.State {
 	case Leader:
-		fmt.Printf("[GetState] Server%v is Leader.\n", rf.me)
+		DPrintf("[GetState] Server%v is Leader.\n", rf.me)
 	case Candidates:
-		fmt.Printf("[GetState] Server%v is Candidate.\n", rf.me)
+		DPrintf("[GetState] Server%v is Candidate.\n", rf.me)
 	case Follower:
-		fmt.Printf("[GetState] Server%v is Follower.\n", rf.me)
+		DPrintf("[GetState] Server%v is Follower.\n", rf.me)
 	}
 
 	term = rf.CurrentTerm
@@ -254,29 +251,27 @@ type RequestVoteReply struct {
 //
 // 候选人向其他节点寻求选票
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	// 如果term < currentTerm返回 false
-	if args.Term < rf.CurrentTerm {
-		fmt.Printf("[RequestVote] 候选人任期小于自己的任期.\n")
+	if args.Term > rf.CurrentTerm {
+		rf.ConvertTo(Follower)
+		rf.CurrentTerm = args.Term
+	}
+	if (args.Term < rf.CurrentTerm) || (rf.VotedFor != -1 && rf.VotedFor != args.CandidateId) {
 		reply.Term = rf.CurrentTerm
 		reply.VoteGranted = false
 		return
-	} else {
-		rf.CurrentTerm = args.Term
-		rf.ConvertTo(Follower)
 	}
 	// 如果 votedFor 为空或者为 candidateId，
 	// 并且候选人的日志至少和自己一样新，那么就投票给他
 	if rf.VotedFor == -1 || rf.VotedFor == args.CandidateId {
-		fmt.Printf("[RequestVote] Server%v为候选人%v投票.\n", rf.me, args.CandidateId)
+		DPrintf("[RequestVote] Server%v为候选人%v投票.\n", rf.me, args.CandidateId)
 		rf.VotedFor = args.CandidateId
 		reply.VoteGranted = true
 		reply.Term = rf.CurrentTerm
-		return
-	} else {
-		fmt.Printf("[RequestVote] Server%v已经投过票了.\n", rf.me)
-		reply.VoteGranted = false
-		reply.Term = rf.CurrentTerm
-		return
+		// 此时要重新设置选举，即模拟心跳包
+		rf.HeartBeat = time.Now()
 	}
 
 }
@@ -285,7 +280,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 func (rf *Raft) RequestAppendEntries(args *AppendEntries, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	fmt.Printf("[Debug] Server%v收到Leader%v发送来的心跳包\n", rf.me, args.LeaderID)
+	DPrintf("[Debug] Server%v收到Leader%v发送来的心跳包\n", rf.me, args.LeaderID)
 	if args.Term < rf.CurrentTerm {
 		// 如果领导者的任期小于接收者的当前任期，返回假
 		reply.Success = false
@@ -332,7 +327,7 @@ func (rf *Raft) RequestAppendEntries(args *AppendEntries, reply *AppendEntriesRe
 //
 func (rf *Raft) sendRequestVote(server int, wg *sync.WaitGroup, req *RequestVoteArgs, reply *RequestVoteReply) bool {
 	defer wg.Done()
-	fmt.Printf("[sendRequestVote] Server%v向Server%v发送选举投票\n", rf.me, server)
+	DPrintf("[sendRequestVote] Server%v向Server%v发送选举投票\n", rf.me, server)
 	ok := rf.peers[server].Call("Raft.RequestVote", req, reply)
 	return ok
 }
@@ -348,7 +343,7 @@ func (rf *Raft) sendAppendEntries(server int, wg *sync.WaitGroup) bool {
 	args.LeaderID = rf.me
 	ok := rf.peers[server].Call("Raft.RequestAppendEntries", args, reply)
 	if reply.Term > rf.CurrentTerm {
-		fmt.Printf("[Debug] Leader%v变成Follower\n", rf.me)
+		DPrintf("[Debug] Leader%v变成Follower\n", rf.me)
 		rf.ConvertTo(Follower)
 		rf.CurrentTerm = reply.Term
 		return false
@@ -407,10 +402,8 @@ func (rf *Raft) getHeartBeatTime() time.Time {
 }
 
 func (rf *Raft) getelectionTimeout() time.Duration {
-	min := 1000
-	max := 2000
-	randTime := rand.Intn(max-min) + min
-	electionTimeout := time.Millisecond * time.Duration(randTime)
+	rand.Seed(time.Now().UnixNano())
+	electionTimeout := 500*time.Millisecond + time.Duration(rand.Int63n(150)*time.Hour.Milliseconds())
 	return electionTimeout
 }
 
@@ -424,8 +417,9 @@ func (rf *Raft) sendHeartBeats() {
 				wg.Add(1)
 				go rf.sendAppendEntries(index, wg)
 			}
-			fmt.Printf("[sendHeartBeats] 等待.\n")
+			DPrintf("[sendHeartBeats] 等待.\n")
 			wg.Wait()
+			time.Sleep(50 * time.Millisecond)
 		}
 	}
 }
@@ -433,9 +427,9 @@ func (rf *Raft) sendHeartBeats() {
 // 候选人发起选举
 func (rf *Raft) election() {
 	// 发起选举，首先增加自己的任期
-	fmt.Printf("[election] 开始选举.\n")
+	DPrintf("[election] 开始选举.\n")
 	rf.CurrentTerm += 1
-	fmt.Printf("[election] 更新任期.\n")
+	DPrintf("[election] 更新任期.\n")
 	rf.ConvertTo(Candidates)
 	// 并行地向除自己的服务器索要选票
 	// 如果没有收到选票，它会反复尝试，直到发生以下三种情况之一：
@@ -471,12 +465,12 @@ func (rf *Raft) election() {
 								rf.ConvertTo(Follower)
 							}
 							if reply.VoteGranted {
-								fmt.Printf("[sendRequestVote] Server%v承认%v\n", server, rf.me)
+								DPrintf("[sendRequestVote] Server%v承认%v\n", server, rf.me)
 								nVote += 1
 								if nVote > len(rf.peers)/2 && rf.State == Candidates {
 									// 获得超过半数的选票，成为 Leader
 									rf.ConvertTo(Leader)
-									fmt.Printf("[Debug] Server%v得到超过半数选票，成为Leader\n", rf.me)
+									DPrintf("[Debug] Server%v得到超过半数选票，成为Leader\n", rf.me)
 									return
 								}
 							}
@@ -516,15 +510,15 @@ func (rf *Raft) ticker() {
 
 		// 如果超过选举超时时间没有接收到心跳包，则变成候选者发起选举
 		if duration > electionTimeout {
-			fmt.Printf("[Debug] Server%v选举超时\n", rf.me)
-			fmt.Printf("[Debug] electionTimeout: %v duration: %v\n", electionTimeout, duration)
+			DPrintf("[Debug] Server%v选举超时\n", rf.me)
+			DPrintf("[Debug] electionTimeout: %v duration: %v\n", electionTimeout, duration)
 			rf.election()
 		} else if rf.State != Leader {
 			// 如果接到了心跳包则变成追随者
-			fmt.Printf("[Debug] Server%v为Follower.\n", rf.me)
+			DPrintf("[Debug] Server%v为Follower.\n", rf.me)
 			continue
 		} else {
-			fmt.Printf("[Debug] Server%v仍为Leader.\n", rf.me)
+			DPrintf("[Debug] Server%v仍为Leader.\n", rf.me)
 		}
 	}
 }
@@ -540,6 +534,7 @@ func (rf *Raft) ConvertTo(state int) {
 		rf.VotedFor = rf.me
 	case Leader:
 		rf.State = Leader
+		rf.HeartBeat = time.Now()
 	}
 }
 
@@ -574,9 +569,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
-
-	// start ticker goroutine to start elections
-	// ch := make(chan bool)
 	go rf.ticker()
 
 	// 每个结点应当检查自己的状态，
